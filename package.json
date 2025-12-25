@@ -4,10 +4,24 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "turbo run build",
+    "check": "turbo run check",
+    "dev": "turbo run dev",
+    "test": "turbo run test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.17.1"
+  "packageManager": "pnpm@10.17.1",
+  "devDependencies": {
+    "turbo": "^2.7.2"
+  },
+  "dependencies": {
+    "@durable-streams/client": "^0.1.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@durable-streams/client": "^0.1.0"
+    }
+  }
 }

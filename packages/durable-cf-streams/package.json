@@ -1,0 +1,47 @@
+{
+  "name": "durable-cf-streams",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js"
+    },
+    "./storage/memory": {
+      "types": "./dist/storage/memory.d.ts",
+      "import": "./dist/storage/memory.js"
+    },
+    "./storage/d1": {
+      "types": "./dist/storage/d1.d.ts",
+      "import": "./dist/storage/d1.js"
+    },
+    "./storage/kv": {
+      "types": "./dist/storage/kv.d.ts",
+      "import": "./dist/storage/kv.js"
+    },
+    "./storage/r2": {
+      "types": "./dist/storage/r2.d.ts",
+      "import": "./dist/storage/r2.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": "^4.0.0"
+  }
+}

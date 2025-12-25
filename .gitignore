@@ -1,0 +1,35 @@
+# turborepo
+.turbo
+
+# logs
+logs
+*.log
+.pnpm-debug.log*
+
+# deps
+node_modules/
+.pnp
+.pnp.js
+
+# ts cache
+*.tsbuildinfo
+
+# env
+.env
+.env.*
+!.env.example
+
+# build
+dist/
+build/
+
+# cf
+*.dev.vars
+.wrangler/
+
+# osx crap
+.DS_Store
+._.DS_Store
+
+# eslint
+.eslintcache
