@@ -1,0 +1,15 @@
+# deps
+node_modules/
+
+# build
+dist/
+.turbo/
+
+# cf
+.wrangler/
+.dev.vars
+
+# env
+.env
+.env.*
+!.env.example
