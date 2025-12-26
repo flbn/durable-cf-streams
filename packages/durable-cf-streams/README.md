@@ -122,7 +122,7 @@ export class StreamDO implements DurableObject {
       });
     }
 
-    // ... handle other methods
+    ...
   }
 }
 ```
