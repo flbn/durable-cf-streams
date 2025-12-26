@@ -37,19 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - example: d1
-            port: 8701
-          - example: hono
-            port: 8702
-          - example: itty
-            port: 8703
-          - example: kv
-            port: 8704
-          - example: memory
-            port: 8705
-          - example: r2
-            port: 8706
+        example: [d1, hono, itty, kv, memory, r2]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -59,30 +47,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
-      - name: clean wrangler cache
-        run: rm -rf .wrangler
+      - name: test
         working-directory: examples/${{ matrix.example }}
-      - name: start dev server
-        run: pnpm run dev --port ${{ matrix.port }} &
-        working-directory: examples/${{ matrix.example }}
-      - name: wait for server
-        run: |
-          for i in {1..30}; do
-            if curl -s -o /dev/null -w '' http://localhost:${{ matrix.port }}/ 2>/dev/null; then
-              echo "Server ready"
-              sleep 5
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Server failed to start"
-          exit 1
-      - name: run tests
-        run: pnpm run test --reporter=verbose --retry=2
-        working-directory: examples/${{ matrix.example }}
-        env:
-          CONFORMANCE_TEST_URL: http://localhost:${{ matrix.port }}
-      - name: cleanup
-        if: always()
-        run: rm -rf .wrangler
-        working-directory: examples/${{ matrix.example }}
+        run: pnpm vitest run --sequence.concurrent=false --reporter=verbose
