@@ -1,0 +1,14 @@
+name = "r2"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+
+[durable_objects]
+bindings = [{ name = "STREAMS", class_name = "StreamDO" }]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["StreamDO"]
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "streams-bucket"

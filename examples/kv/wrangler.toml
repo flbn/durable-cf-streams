@@ -1,0 +1,14 @@
+name = "kv"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+
+[durable_objects]
+bindings = [{ name = "STREAMS", class_name = "StreamDO" }]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["StreamDO"]
+
+[[kv_namespaces]]
+binding = "KV"
+id = "streams-kv"
