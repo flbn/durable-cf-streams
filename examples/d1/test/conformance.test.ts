@@ -1,8 +1,8 @@
 import { runConformanceTests } from "@durable-streams/server-conformance-tests";
-import { unstable_dev, type UnstableDevWorker } from "wrangler";
-import { beforeAll, afterAll } from "vitest";
+import { afterAll, beforeAll } from "vitest";
+import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 
-let worker: UnstableDevWorker;
+let worker: Unstable_DevWorker;
 const config = { baseUrl: "" };
 
 beforeAll(async () => {

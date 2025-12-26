@@ -34,9 +34,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/durable-cf-streams
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
-        version: 4.20251223.0
       '@durable-streams/server-conformance-tests':
         specifier: ^0.1.0
         version: 0.1.0
@@ -56,9 +53,6 @@ importers:
         specifier: ^4.0.0
         version: 4.11.2
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
-        version: 4.20251223.0
       '@durable-streams/server-conformance-tests':
         specifier: ^0.1.0
         version: 0.1.0
@@ -78,9 +72,6 @@ importers:
         specifier: ^5.0.0
         version: 5.0.22
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
-        version: 4.20251223.0
       '@durable-streams/server-conformance-tests':
         specifier: ^0.1.0
         version: 0.1.0
@@ -97,9 +88,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/durable-cf-streams
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
-        version: 4.20251223.0
       '@durable-streams/server-conformance-tests':
         specifier: ^0.1.0
         version: 0.1.0
@@ -116,9 +104,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/durable-cf-streams
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
-        version: 4.20251223.0
       '@durable-streams/server-conformance-tests':
         specifier: ^0.1.0
         version: 0.1.0
@@ -135,9 +120,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/durable-cf-streams
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
-        version: 4.20251223.0
       '@durable-streams/server-conformance-tests':
         specifier: ^0.1.0
         version: 0.1.0
@@ -155,7 +137,7 @@ importers:
         version: 3.19.13
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20241218.0
+        specifier: ^4.20250620.0
         version: 4.20251223.0
       tsup:
         specifier: ^8.0.0
