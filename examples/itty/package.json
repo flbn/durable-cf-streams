@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "vitest run"
+    "test": "vitest run",
+    "types": "wrangler types"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241218.0",

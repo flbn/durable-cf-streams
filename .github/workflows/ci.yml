@@ -33,28 +33,27 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run check
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       - run: pnpm run build
+      - run: pnpm run check
 
   test:
     runs-on: ubuntu-latest
-    needs: build
     strategy:
+      fail-fast: false
       matrix:
-        example: [d1, hono, itty, kv, memory, r2]
+        include:
+          - example: d1
+            port: 8701
+          - example: hono
+            port: 8702
+          - example: itty
+            port: 8703
+          - example: kv
+            port: 8704
+          - example: memory
+            port: 8705
+          - example: r2
+            port: 8706
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -66,5 +65,17 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
-      - run: pnpm run test
+      - name: start dev server
+        run: pnpm run dev --port ${{ matrix.port }} &
         working-directory: examples/${{ matrix.example }}
+      - name: wait for server
+        run: |
+          for i in {1..30}; do
+            curl -s http://127.0.0.1:${{ matrix.port }} > /dev/null && break
+            sleep 1
+          done
+      - name: run tests
+        run: pnpm run test
+        working-directory: examples/${{ matrix.example }}
+        env:
+          CONFORMANCE_TEST_URL: http://127.0.0.1:${{ matrix.port }}
