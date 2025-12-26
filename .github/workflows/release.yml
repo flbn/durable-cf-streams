@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   release-please:
@@ -34,12 +35,10 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
-      - run: pnpm publish --no-git-checks
+      - run: npm publish --no-git-checks
         working-directory: packages/durable-cf-streams
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
