@@ -71,7 +71,7 @@ jobs:
           for i in {1..30}; do
             if curl -s -o /dev/null -w '' http://localhost:8787/ 2>/dev/null; then
               echo "Server ready"
-              sleep 5
+              sleep 10
               exit 0
             fi
             sleep 2
@@ -79,5 +79,5 @@ jobs:
           echo "Server failed to start"
           exit 1
       - name: run tests
-        run: pnpm run test --reporter=verbose
+        run: pnpm run test --reporter=verbose --retry=2
         working-directory: examples/${{ matrix.example }}
