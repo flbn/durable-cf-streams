@@ -59,8 +59,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
+      - name: clean local state
+        run: rm -rf .wrangler
+        working-directory: examples/${{ matrix.example }}
       - name: start dev server
-        run: pnpm run dev --port ${{ matrix.port }} &
+        run: pnpm run dev --port ${{ matrix.port }} --persist-to .wrangler-${{ matrix.port }} &
         working-directory: examples/${{ matrix.example }}
       - name: wait for server
         run: |
