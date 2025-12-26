@@ -64,12 +64,16 @@ jobs:
         working-directory: examples/${{ matrix.example }}
       - name: wait for server
         run: |
-          for i in {1..30}; do
-            curl -s http://127.0.0.1:${{ matrix.port }} > /dev/null && break
+          for i in {1..60}; do
+            if curl -sf http://127.0.0.1:${{ matrix.port }}/health 2>/dev/null || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:${{ matrix.port }}/ 2>/dev/null | grep -qE '^[2-4]'; then
+              echo "Server ready after $i seconds"
+              sleep 2
+              break
+            fi
             sleep 1
           done
       - name: run tests
-        run: pnpm run test
+        run: pnpm run test --reporter=verbose
         working-directory: examples/${{ matrix.example }}
         env:
           CONFORMANCE_TEST_URL: http://127.0.0.1:${{ matrix.port }}
