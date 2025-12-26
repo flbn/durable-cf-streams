@@ -12,17 +12,12 @@ pnpm run test
 
 ## pull requests
 
-- fork the repo and create a branch
-- make your changes
-- run `pnpm run lint` and `pnpm run check`
-- open a pull request
+pretty standard. create a branch, open a PR. before committing, just make sure you've run `pnpm run lint` and `pnpm run check`. i dont want to add precommit hooks. pls.
 
 ## code style
 
-- run `pnpm run lint:fix` before committing
-- keep functions under complexity limit of 10
-- use `type` over `interface`
+take a look at the [biome config](./biome.jsonc)
 
 ## license
 
-by contributing, you agree that your contributions will be licensed under mit.
+by contributing, you agree that your contributions will be licensed under the terms of the [repo license](./LICENSE.md)
