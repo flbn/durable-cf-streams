@@ -8,6 +8,8 @@ const config = { baseUrl: "" };
 beforeAll(async () => {
   worker = await unstable_dev("src/index.ts", {
     experimental: { disableExperimentalWarning: true },
+    local: true,
+    persist: false,
   });
   config.baseUrl = `http://${worker.address}:${worker.port}`;
 });
