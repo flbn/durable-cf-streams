@@ -8,6 +8,7 @@ export default defineConfig({
     "src/storage/d1.ts",
     "src/storage/kv.ts",
     "src/storage/r2.ts",
+    "src/storage/sqlite.ts",
   ],
   format: ["esm"],
   dts: true,

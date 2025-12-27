@@ -1,6 +1,6 @@
 {
   "name": "durable-cf-streams",
-  "version": "0.1.4",
+  "version": "0.1.41",
   "description": "pure building blocks for durable streams on cloudflare",
   "license": "MIT",
   "repository": {
@@ -44,6 +44,10 @@
     "./storage/r2": {
       "types": "./dist/storage/r2.d.ts",
       "import": "./dist/storage/r2.js"
+    },
+    "./storage/sqlite": {
+      "types": "./dist/storage/sqlite.d.ts",
+      "import": "./dist/storage/sqlite.js"
     }
   },
   "files": [

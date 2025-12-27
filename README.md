@@ -16,6 +16,15 @@ each example passes the full 124-test conformance suite:
 - [`kv`](examples/kv) - workers kv backend
 - [`memory`](examples/memory) - in-memory store (for durable objects)
 - [`r2`](examples/r2) - r2 bucket backend
+- [`sqlite`](examples/sqlite) - sqlite store (for durable objects with persistence)
+
+## storage backends
+
+- **MemoryStore** - in-memory, for durable objects without persistence
+- **SqliteStore** - sqlite via `SqlStorage`, for durable objects with persistence
+- **D1Store** - cloudflare d1 database
+- **KVStore** - workers kv
+- **R2Store** - r2 bucket
 
 ## quick start
 
