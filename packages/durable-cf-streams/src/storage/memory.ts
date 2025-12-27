@@ -1,19 +1,12 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
-import {
-  ContentTypeMismatchError,
-  SequenceConflictError,
-  StreamConflictError,
-  StreamNotFoundError,
-} from "../errors.js";
+import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
   generateETag,
   isJsonContentType,
-  normalizeContentType,
-  processJsonAppend,
-  validateJsonCreate,
+  isMetadataExpired,
 } from "../protocol.js";
 import type {
   AppendOptions,
@@ -29,6 +22,13 @@ import type {
   WaitResult,
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
+import {
+  mergeData,
+  prepareInitialData,
+  validateAppendContentType,
+  validateAppendSeq,
+  validateIdempotentCreate,
+} from "./utils.js";
 
 type Waiter = {
   deferred: Deferred.Deferred<WaitResult>;
@@ -44,49 +44,25 @@ type StoredStream = {
   waiters: Waiter[];
 };
 
-function validateIdempotentCreate(
-  existing: { contentType: string; ttlSeconds?: number; expiresAt?: string },
-  options: PutOptions
-): void {
-  const existingNormalized = normalizeContentType(existing.contentType);
-  const reqNormalized = normalizeContentType(options.contentType);
-
-  if (existingNormalized !== reqNormalized) {
-    throw new ContentTypeMismatchError(existingNormalized, reqNormalized);
-  }
-
-  if (options.ttlSeconds !== existing.ttlSeconds) {
-    throw new StreamConflictError("TTL mismatch on idempotent create");
-  }
-
-  if (options.expiresAt !== existing.expiresAt) {
-    throw new StreamConflictError("Expires-At mismatch on idempotent create");
-  }
-}
-
-function prepareInitialData(options: PutOptions): {
-  data: Uint8Array;
-  appendCount: number;
-  nextOffset: Offset;
-} {
-  let data = options.data ?? new Uint8Array(0);
-  const isJson = isJsonContentType(options.contentType);
-
-  if (isJson && data.length > 0) {
-    data = validateJsonCreate(data, true);
-  }
-
-  const appendCount = data.length > 0 ? 1 : 0;
-  const nextOffset = formatOffset(appendCount, data.length);
-
-  return { data, appendCount, nextOffset };
-}
-
 export class MemoryStore implements StreamStore {
   private readonly streams = new Map<string, StoredStream>();
 
+  private getStream(path: string): StoredStream | undefined {
+    const stream = this.streams.get(path);
+    if (!stream) {
+      return undefined;
+    }
+
+    if (isMetadataExpired(stream.metadata)) {
+      this.streams.delete(path);
+      return undefined;
+    }
+
+    return stream;
+  }
+
   put(path: string, options: PutOptions): Promise<PutResult> {
-    const existing = this.streams.get(path);
+    const existing = this.getStream(path);
 
     if (existing) {
       validateIdempotentCreate(existing.metadata, options);
@@ -123,41 +99,23 @@ export class MemoryStore implements StreamStore {
     data: Uint8Array,
     options?: AppendOptions
   ): Promise<AppendResult> {
-    const stream = this.streams.get(path);
+    const stream = this.getStream(path);
     if (!stream) {
       return Promise.reject(new StreamNotFoundError(path));
     }
 
-    const streamNormalized = normalizeContentType(stream.metadata.contentType);
-    if (options?.contentType) {
-      const reqNormalized = normalizeContentType(options.contentType);
-      if (streamNormalized !== reqNormalized) {
-        return Promise.reject(
-          new ContentTypeMismatchError(streamNormalized, reqNormalized)
-        );
-      }
-    }
-
-    if (
-      options?.seq !== undefined &&
-      stream.lastSeq !== undefined &&
-      options.seq <= stream.lastSeq
-    ) {
-      return Promise.reject(
-        new SequenceConflictError(`> ${stream.lastSeq}`, options.seq)
+    try {
+      validateAppendContentType(
+        stream.metadata.contentType,
+        options?.contentType
       );
+      validateAppendSeq(stream.lastSeq, options?.seq);
+    } catch (e) {
+      return Promise.reject(e);
     }
 
     const isJson = isJsonContentType(stream.metadata.contentType);
-    let newData: Uint8Array;
-
-    if (isJson) {
-      newData = processJsonAppend(stream.data, data);
-    } else {
-      newData = new Uint8Array(stream.data.length + data.length);
-      newData.set(stream.data);
-      newData.set(data, stream.data.length);
-    }
+    const newData = mergeData(stream.data, data, isJson);
 
     stream.appendCount++;
     const nextOffset = formatOffset(stream.appendCount, newData.length);
@@ -174,7 +132,7 @@ export class MemoryStore implements StreamStore {
   }
 
   get(path: string, options?: GetOptions): Promise<GetResult> {
-    const stream = this.streams.get(path);
+    const stream = this.getStream(path);
     if (!stream) {
       return Promise.reject(new StreamNotFoundError(path));
     }
@@ -204,7 +162,7 @@ export class MemoryStore implements StreamStore {
   }
 
   head(path: string): Promise<HeadResult | null> {
-    const stream = this.streams.get(path);
+    const stream = this.getStream(path);
     if (!stream) {
       return Promise.resolve(null);
     }
@@ -229,7 +187,7 @@ export class MemoryStore implements StreamStore {
   }
 
   has(path: string): boolean {
-    return this.streams.has(path);
+    return this.getStream(path) !== undefined;
   }
 
   waitForData(
@@ -237,7 +195,7 @@ export class MemoryStore implements StreamStore {
     offset: Offset,
     timeoutMs: number
   ): Promise<WaitResult> {
-    const stream = this.streams.get(path);
+    const stream = this.getStream(path);
     if (!stream) {
       return Promise.reject(new StreamNotFoundError(path));
     }
@@ -281,7 +239,7 @@ export class MemoryStore implements StreamStore {
   }
 
   formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
-    const stream = this.streams.get(path);
+    const stream = this.getStream(path);
     if (!stream) {
       return new Uint8Array(0);
     }
