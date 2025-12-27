@@ -12,12 +12,17 @@ pnpm add durable-cf-streams
 
 ```typescript
 import { MemoryStore } from "durable-cf-streams/storage/memory";
+import { SqliteStore } from "durable-cf-streams/storage/sqlite";
 import { D1Store } from "durable-cf-streams/storage/d1";
 import { KVStore } from "durable-cf-streams/storage/kv";
 import { R2Store } from "durable-cf-streams/storage/r2";
 
-// in-memory (for durable objects)
+// in-memory (for durable objects without persistence)
 const store = new MemoryStore();
+
+// sqlite (for durable objects with persistence via SqlStorage)
+const store = new SqliteStore(state.storage.sql);
+store.initialize(); // creates table
 
 // d1 database
 const store = new D1Store(env.DB);
@@ -137,14 +142,20 @@ switch (error._tag) {
 ## example
 
 ```typescript
-import { MemoryStore } from "durable-cf-streams/storage/memory";
+import { SqliteStore } from "durable-cf-streams/storage/sqlite";
 import {
   normalizeContentType,
   STREAM_OFFSET_HEADER,
 } from "durable-cf-streams";
 
-export class StreamDO implements DurableObject {
-  private store = new MemoryStore();
+export class StreamDO extends DurableObject {
+  private store: SqliteStore;
+
+  constructor(state: DurableObjectState, env: Env) {
+    super(state, env);
+    this.store = new SqliteStore(state.storage.sql);
+    this.store.initialize();
+  }
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;

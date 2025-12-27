@@ -127,6 +127,22 @@ importers:
         specifier: ^4.54.0
         version: 4.54.0(@cloudflare/workers-types@4.20251225.0)
 
+  examples/sqlite:
+    dependencies:
+      durable-cf-streams:
+        specifier: workspace:*
+        version: link:../../packages/durable-cf-streams
+    devDependencies:
+      '@durable-streams/server-conformance-tests':
+        specifier: ^0.1.4
+        version: 0.1.4
+      vitest:
+        specifier: ^4.0.16
+        version: 4.0.16
+      wrangler:
+        specifier: ^4.54.0
+        version: 4.54.0(@cloudflare/workers-types@4.20251225.0)
+
   packages/durable-cf-streams:
     dependencies:
       effect:
