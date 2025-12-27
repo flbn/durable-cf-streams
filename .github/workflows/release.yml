@@ -20,7 +20,6 @@ jobs:
         id: release
         with:
           release-type: node
-          package-name: durable-cf-streams
 
   publish:
     runs-on: ubuntu-latest
