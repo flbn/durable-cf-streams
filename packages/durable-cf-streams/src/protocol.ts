@@ -1,5 +1,34 @@
 import { InvalidJsonError } from "./errors.js";
-import type { Offset } from "./types.js";
+import type { Offset, StreamMetadata } from "./types.js";
+
+export type ExpirationInfo = {
+  readonly ttlSeconds?: number;
+  readonly expiresAt?: string;
+  readonly createdAt?: number;
+};
+
+export const isExpired = (info: ExpirationInfo): boolean => {
+  const now = Date.now();
+
+  if (info.expiresAt) {
+    const expiresAtMs = new Date(info.expiresAt).getTime();
+    if (Number.isNaN(expiresAtMs) || now >= expiresAtMs) {
+      return true;
+    }
+  }
+
+  if (info.ttlSeconds !== undefined && info.createdAt !== undefined) {
+    const expiresAtMs = info.createdAt + info.ttlSeconds * 1000;
+    if (now >= expiresAtMs) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+export const isMetadataExpired = (metadata: StreamMetadata): boolean =>
+  isExpired(metadata);
 
 const TTL_REGEX = /^[1-9][0-9]*$/;
 const EXPIRES_AT_REGEX =

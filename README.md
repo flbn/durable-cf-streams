@@ -52,6 +52,14 @@ pnpm run test
 
 note: protocol constants and utilities are implemented locally for cloudflare workers compatibility (no node.js dependencies).
 
+## releasing
+
+1. update version in `packages/durable-cf-streams/package.json`
+2. update `CHANGELOG.md` in the package
+3. commit with `chore: release vX.Y.Z`
+4. tag and push: `git tag vX.Y.Z && git push --tags`
+5. create github release from tag to trigger npm publish
+
 ## license
 
 mit
