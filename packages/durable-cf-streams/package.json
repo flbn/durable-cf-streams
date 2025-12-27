@@ -1,6 +1,22 @@
 {
   "name": "durable-cf-streams",
   "version": "0.1.0",
+  "description": "pure building blocks for durable streams on cloudflare",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flbn/durable-cf-streams.git",
+    "directory": "packages/durable-cf-streams"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "durable-objects",
+    "streams",
+    "d1",
+    "kv",
+    "r2"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -33,15 +49,23 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=22"
+  },
+  "volta": {
+    "node": "22.16.0"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsup",
     "check": "tsc --noEmit"
   },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241218.0",
-    "typescript": "^5.7.2"
+  "dependencies": {
+    "effect": "^3.19.13"
   },
-  "peerDependencies": {
-    "@cloudflare/workers-types": "^4.0.0"
-  }
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {}
 }

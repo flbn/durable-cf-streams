@@ -1,19 +1,20 @@
 {
-  "name": "conformance-server",
-  "version": "0.0.0",
+  "name": "hono",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "vitest run"
+    "test": "vitest run",
+    "types": "wrangler types"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241218.0",
     "@durable-streams/server-conformance-tests": "^0.1.0",
     "vitest": "^3.2.4",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.54.0"
   },
   "dependencies": {
-    "durable-cf-streams": "workspace:*"
+    "durable-cf-streams": "workspace:*",
+    "hono": "^4.0.0"
   }
 }

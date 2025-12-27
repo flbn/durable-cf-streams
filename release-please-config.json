@@ -1,0 +1,11 @@
+{
+  "packages": {
+    "packages/durable-cf-streams": {
+      "release-type": "node",
+      "package-name": "durable-cf-streams",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true
+    }
+  }
+}

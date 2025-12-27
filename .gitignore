@@ -23,6 +23,9 @@ node_modules/
 dist/
 build/
 
+# not sure why this happens lol
+_tmp*
+
 # cf
 *.dev.vars
 .wrangler/
