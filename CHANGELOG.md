@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.41 (2025-12-27)
+
+
+### Features
+
+* sqlite backed DO store
+
+
 ## 0.1.4 (2025-12-27)
 
 
