@@ -42,9 +42,12 @@ export {
 } from "./offsets.js";
 export { decodeStreamPath, encodeStreamPath } from "./path.js";
 export {
+  type ExpirationInfo,
   formatJsonResponse,
   generateETag,
+  isExpired,
   isJsonContentType,
+  isMetadataExpired,
   normalizeContentType,
   parseETag,
   processJsonAppend,

@@ -1,19 +1,12 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
-import {
-  ContentTypeMismatchError,
-  SequenceConflictError,
-  StreamConflictError,
-  StreamNotFoundError,
-} from "../errors.js";
+import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
   generateETag,
+  isExpired,
   isJsonContentType,
-  normalizeContentType,
-  processJsonAppend,
-  validateJsonCreate,
 } from "../protocol.js";
 import type {
   AppendOptions,
@@ -28,6 +21,13 @@ import type {
   WaitResult,
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
+import {
+  mergeData,
+  prepareInitialData,
+  validateAppendContentType,
+  validateAppendSeq,
+  validateIdempotentCreate,
+} from "./utils.js";
 
 type StreamRecord = {
   contentType: string;
@@ -43,44 +43,6 @@ type Waiter = {
   deferred: Deferred.Deferred<WaitResult>;
   offset: Offset;
 };
-
-function validateIdempotentCreate(
-  existing: { contentType: string; ttlSeconds?: number; expiresAt?: string },
-  options: PutOptions
-): void {
-  const existingNormalized = normalizeContentType(existing.contentType);
-  const reqNormalized = normalizeContentType(options.contentType);
-
-  if (existingNormalized !== reqNormalized) {
-    throw new ContentTypeMismatchError(existingNormalized, reqNormalized);
-  }
-
-  if (options.ttlSeconds !== existing.ttlSeconds) {
-    throw new StreamConflictError("TTL mismatch on idempotent create");
-  }
-
-  if (options.expiresAt !== existing.expiresAt) {
-    throw new StreamConflictError("Expires-At mismatch on idempotent create");
-  }
-}
-
-function prepareInitialData(options: PutOptions): {
-  data: Uint8Array;
-  appendCount: number;
-  nextOffset: string;
-} {
-  let data = options.data ?? new Uint8Array(0);
-  const isJson = isJsonContentType(options.contentType);
-
-  if (isJson && data.length > 0) {
-    data = validateJsonCreate(data, true);
-  }
-
-  const appendCount = data.length > 0 ? 1 : 0;
-  const nextOffset = formatOffset(appendCount, data.length);
-
-  return { data, appendCount, nextOffset };
-}
 
 export class KVStore implements StreamStore {
   private readonly kv: KVNamespace;
@@ -105,9 +67,16 @@ export class KVStore implements StreamStore {
       "json"
     );
 
-    if (existingMeta) {
+    if (existingMeta && !isExpired(existingMeta)) {
       validateIdempotentCreate(existingMeta, options);
       return { created: false, nextOffset: existingMeta.nextOffset };
+    }
+
+    if (existingMeta) {
+      await Promise.all([
+        this.kv.delete(this.metaKey(path)),
+        this.kv.delete(this.dataKey(path)),
+      ]);
     }
 
     const { data, appendCount, nextOffset } = prepareInitialData(options);
@@ -138,25 +107,12 @@ export class KVStore implements StreamStore {
   ): Promise<AppendResult> {
     const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
 
-    if (!meta) {
+    if (!meta || isExpired(meta)) {
       throw new StreamNotFoundError(path);
     }
 
-    const streamNormalized = normalizeContentType(meta.contentType);
-    if (options?.contentType) {
-      const reqNormalized = normalizeContentType(options.contentType);
-      if (streamNormalized !== reqNormalized) {
-        throw new ContentTypeMismatchError(streamNormalized, reqNormalized);
-      }
-    }
-
-    if (
-      options?.seq !== undefined &&
-      meta.lastSeq !== undefined &&
-      options.seq <= meta.lastSeq
-    ) {
-      throw new SequenceConflictError(`> ${meta.lastSeq}`, options.seq);
-    }
+    validateAppendContentType(meta.contentType, options?.contentType);
+    validateAppendSeq(meta.lastSeq, options?.seq);
 
     const existingRaw = await this.kv.get(this.dataKey(path), "arrayBuffer");
     const existingData = existingRaw
@@ -164,15 +120,7 @@ export class KVStore implements StreamStore {
       : new Uint8Array(0);
 
     const isJson = isJsonContentType(meta.contentType);
-    let newData: Uint8Array;
-
-    if (isJson) {
-      newData = processJsonAppend(existingData, data);
-    } else {
-      newData = new Uint8Array(existingData.length + data.length);
-      newData.set(existingData);
-      newData.set(data, existingData.length);
-    }
+    const newData = mergeData(existingData, data, isJson);
 
     const newAppendCount = meta.appendCount + 1;
     const nextOffset = formatOffset(newAppendCount, newData.length);
@@ -197,7 +145,7 @@ export class KVStore implements StreamStore {
   async get(path: string, options?: GetOptions): Promise<GetResult> {
     const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
 
-    if (!meta) {
+    if (!meta || isExpired(meta)) {
       this.streamCache.delete(path);
       throw new StreamNotFoundError(path);
     }
@@ -233,7 +181,7 @@ export class KVStore implements StreamStore {
   async head(path: string): Promise<HeadResult | null> {
     const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
 
-    if (!meta) {
+    if (!meta || isExpired(meta)) {
       this.streamCache.delete(path);
       return null;
     }
@@ -274,7 +222,7 @@ export class KVStore implements StreamStore {
   ): Promise<WaitResult> {
     const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
 
-    if (!meta) {
+    if (!meta || isExpired(meta)) {
       throw new StreamNotFoundError(path);
     }
 

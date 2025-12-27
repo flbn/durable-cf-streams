@@ -1,6 +1,6 @@
 {
   "name": "durable-cf-streams",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "pure building blocks for durable streams on cloudflare",
   "license": "MIT",
   "repository": {
@@ -63,7 +63,7 @@
     "effect": "^3.19.13"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250620.0",
+    "@cloudflare/workers-types": "^4.20251225.0",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },

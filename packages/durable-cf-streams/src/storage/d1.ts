@@ -1,19 +1,12 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
-import {
-  ContentTypeMismatchError,
-  SequenceConflictError,
-  StreamConflictError,
-  StreamNotFoundError,
-} from "../errors.js";
+import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
   generateETag,
+  isExpired,
   isJsonContentType,
-  normalizeContentType,
-  processJsonAppend,
-  validateJsonCreate,
 } from "../protocol.js";
 import type {
   AppendOptions,
@@ -28,6 +21,13 @@ import type {
   WaitResult,
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
+import {
+  mergeData,
+  prepareInitialData,
+  validateAppendContentType,
+  validateAppendSeq,
+  validateIdempotentCreate,
+} from "./utils.js";
 
 type StreamRow = {
   path: string;
@@ -46,43 +46,16 @@ type Waiter = {
   offset: Offset;
 };
 
-function validateIdempotentCreate(
-  existing: { contentType: string; ttlSeconds?: number; expiresAt?: string },
-  options: PutOptions
-): void {
-  const existingNormalized = normalizeContentType(existing.contentType);
-  const reqNormalized = normalizeContentType(options.contentType);
-
-  if (existingNormalized !== reqNormalized) {
-    throw new ContentTypeMismatchError(existingNormalized, reqNormalized);
-  }
-
-  if (options.ttlSeconds !== existing.ttlSeconds) {
-    throw new StreamConflictError("TTL mismatch on idempotent create");
-  }
-
-  if (options.expiresAt !== existing.expiresAt) {
-    throw new StreamConflictError("Expires-At mismatch on idempotent create");
-  }
-}
-
-function prepareInitialData(options: PutOptions): {
-  data: Uint8Array;
-  appendCount: number;
-  nextOffset: string;
-} {
-  let data = options.data ?? new Uint8Array(0);
-  const isJson = isJsonContentType(options.contentType);
-
-  if (isJson && data.length > 0) {
-    data = validateJsonCreate(data, true);
-  }
-
-  const appendCount = data.length > 0 ? 1 : 0;
-  const nextOffset = formatOffset(appendCount, data.length);
-
-  return { data, appendCount, nextOffset };
-}
+const isRowExpired = (row: {
+  ttl_seconds: number | null;
+  expires_at: string | null;
+  created_at: number;
+}): boolean =>
+  isExpired({
+    ttlSeconds: row.ttl_seconds ?? undefined,
+    expiresAt: row.expires_at ?? undefined,
+    createdAt: row.created_at,
+  });
 
 export class D1Store implements StreamStore {
   private readonly db: D1Database;
@@ -103,17 +76,21 @@ export class D1Store implements StreamStore {
   async put(path: string, options: PutOptions): Promise<PutResult> {
     const existing = await this.db
       .prepare(
-        "SELECT content_type, ttl_seconds, expires_at, next_offset FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, next_offset FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
         Pick<
           StreamRow,
-          "content_type" | "ttl_seconds" | "expires_at" | "next_offset"
+          | "content_type"
+          | "ttl_seconds"
+          | "expires_at"
+          | "created_at"
+          | "next_offset"
         >
       >();
 
-    if (existing) {
+    if (existing && !isRowExpired(existing)) {
       validateIdempotentCreate(
         {
           contentType: existing.content_type,
@@ -123,6 +100,13 @@ export class D1Store implements StreamStore {
         options
       );
       return { created: false, nextOffset: existing.next_offset };
+    }
+
+    if (existing) {
+      await this.db
+        .prepare("DELETE FROM streams WHERE path = ?")
+        .bind(path)
+        .run();
     }
 
     const { data, appendCount, nextOffset } = prepareInitialData(options);
@@ -156,47 +140,33 @@ export class D1Store implements StreamStore {
   ): Promise<AppendResult> {
     const stream = await this.db
       .prepare(
-        "SELECT content_type, data, next_offset, last_seq, append_count FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset, last_seq, append_count FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
         Pick<
           StreamRow,
-          "content_type" | "data" | "next_offset" | "last_seq" | "append_count"
+          | "content_type"
+          | "ttl_seconds"
+          | "expires_at"
+          | "created_at"
+          | "data"
+          | "next_offset"
+          | "last_seq"
+          | "append_count"
         >
       >();
 
-    if (!stream) {
+    if (!stream || isRowExpired(stream)) {
       throw new StreamNotFoundError(path);
     }
 
-    const streamNormalized = normalizeContentType(stream.content_type);
-    if (options?.contentType) {
-      const reqNormalized = normalizeContentType(options.contentType);
-      if (streamNormalized !== reqNormalized) {
-        throw new ContentTypeMismatchError(streamNormalized, reqNormalized);
-      }
-    }
-
-    if (
-      options?.seq !== undefined &&
-      stream.last_seq !== null &&
-      options.seq <= stream.last_seq
-    ) {
-      throw new SequenceConflictError(`> ${stream.last_seq}`, options.seq);
-    }
+    validateAppendContentType(stream.content_type, options?.contentType);
+    validateAppendSeq(stream.last_seq ?? undefined, options?.seq);
 
     const existingData = new Uint8Array(stream.data);
     const isJson = isJsonContentType(stream.content_type);
-    let newData: Uint8Array;
-
-    if (isJson) {
-      newData = processJsonAppend(existingData, data);
-    } else {
-      newData = new Uint8Array(existingData.length + data.length);
-      newData.set(existingData);
-      newData.set(data, existingData.length);
-    }
+    const newData = mergeData(existingData, data, isJson);
 
     const newAppendCount = stream.append_count + 1;
     const nextOffset = formatOffset(newAppendCount, newData.length);
@@ -224,12 +194,22 @@ export class D1Store implements StreamStore {
   async get(path: string, options?: GetOptions): Promise<GetResult> {
     const stream = await this.db
       .prepare(
-        "SELECT content_type, data, next_offset FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset FROM streams WHERE path = ?"
       )
       .bind(path)
-      .first<Pick<StreamRow, "content_type" | "data" | "next_offset">>();
+      .first<
+        Pick<
+          StreamRow,
+          | "content_type"
+          | "ttl_seconds"
+          | "expires_at"
+          | "created_at"
+          | "data"
+          | "next_offset"
+        >
+      >();
 
-    if (!stream) {
+    if (!stream || isRowExpired(stream)) {
       this.streamCache.delete(path);
       throw new StreamNotFoundError(path);
     }
@@ -262,11 +242,22 @@ export class D1Store implements StreamStore {
 
   async head(path: string): Promise<HeadResult | null> {
     const stream = await this.db
-      .prepare("SELECT content_type, next_offset FROM streams WHERE path = ?")
+      .prepare(
+        "SELECT content_type, ttl_seconds, expires_at, created_at, next_offset FROM streams WHERE path = ?"
+      )
       .bind(path)
-      .first<Pick<StreamRow, "content_type" | "next_offset">>();
+      .first<
+        Pick<
+          StreamRow,
+          | "content_type"
+          | "ttl_seconds"
+          | "expires_at"
+          | "created_at"
+          | "next_offset"
+        >
+      >();
 
-    if (!stream) {
+    if (!stream || isRowExpired(stream)) {
       this.streamCache.delete(path);
       return null;
     }
@@ -306,11 +297,15 @@ export class D1Store implements StreamStore {
     timeoutMs: number
   ): Promise<WaitResult> {
     const stream = await this.db
-      .prepare("SELECT data FROM streams WHERE path = ?")
+      .prepare(
+        "SELECT ttl_seconds, expires_at, created_at, data FROM streams WHERE path = ?"
+      )
       .bind(path)
-      .first<Pick<StreamRow, "data">>();
+      .first<
+        Pick<StreamRow, "ttl_seconds" | "expires_at" | "created_at" | "data">
+      >();
 
-    if (!stream) {
+    if (!stream || isRowExpired(stream)) {
       throw new StreamNotFoundError(path);
     }
 
