@@ -27,7 +27,6 @@
     "ultracite": "6.5.0"
   },
   "dependencies": {
-    "@durable-streams/client": "^0.1.0",
     "durable-cf-streams": "workspace:*"
   },
   "pnpm": {

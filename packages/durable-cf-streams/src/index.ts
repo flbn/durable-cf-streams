@@ -1,8 +1,6 @@
 // biome-ignore lint: performance/noBarrelFile: bleh, its a library
 export {
   CURSOR_QUERY_PARAM,
-  decodeStreamPath,
-  encodeStreamPath,
   LIVE_QUERY_PARAM,
   OFFSET_QUERY_PARAM,
   SSE_COMPATIBLE_CONTENT_TYPES,
@@ -14,6 +12,7 @@ export {
   STREAM_UP_TO_DATE_HEADER,
 } from "./const.js";
 export {
+  type CursorOptions,
   calculateCursor,
   DEFAULT_CURSOR_EPOCH,
   DEFAULT_CURSOR_INTERVAL_SECONDS,
@@ -41,6 +40,7 @@ export {
   type ParsedOffset,
   parseOffset,
 } from "./offsets.js";
+export { decodeStreamPath, encodeStreamPath } from "./path.js";
 export {
   formatJsonResponse,
   generateETag,

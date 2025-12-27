@@ -47,7 +47,7 @@ interface StreamStore {
 
 ## protocol constants
 
-re-exported from `@durable-streams/client` and `@durable-streams/server` for convenience:
+compatible with the [durable streams protocol](https://github.com/durable-streams/durable-streams):
 
 ```typescript
 import {

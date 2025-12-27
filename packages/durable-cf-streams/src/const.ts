@@ -1,18 +1,15 @@
-// biome-ignore lint: performance/noBarrelFile: bleh, its a library
-export {
-  CURSOR_QUERY_PARAM,
-  LIVE_QUERY_PARAM,
-  OFFSET_QUERY_PARAM,
-  SSE_COMPATIBLE_CONTENT_TYPES,
-  STREAM_CURSOR_HEADER,
-  STREAM_EXPIRES_AT_HEADER,
-  STREAM_OFFSET_HEADER,
-  STREAM_SEQ_HEADER,
-  STREAM_TTL_HEADER,
-  STREAM_UP_TO_DATE_HEADER,
-} from "@durable-streams/client";
+export const STREAM_OFFSET_HEADER = "Stream-Next-Offset";
+export const STREAM_CURSOR_HEADER = "Stream-Cursor";
+export const STREAM_UP_TO_DATE_HEADER = "Stream-Up-To-Date";
+export const STREAM_SEQ_HEADER = "Stream-Seq";
+export const STREAM_TTL_HEADER = "Stream-TTL";
+export const STREAM_EXPIRES_AT_HEADER = "Stream-Expires-At";
 
-export {
-  decodeStreamPath,
-  encodeStreamPath,
-} from "@durable-streams/server";
+export const OFFSET_QUERY_PARAM = "offset";
+export const LIVE_QUERY_PARAM = "live";
+export const CURSOR_QUERY_PARAM = "cursor";
+
+export const SSE_COMPATIBLE_CONTENT_TYPES: readonly string[] = [
+  "text/",
+  "application/json",
+];
