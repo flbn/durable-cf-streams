@@ -1,5 +1,5 @@
 import { Deferred, Effect } from "effect";
-import { generateCursor } from "../cursor.js";
+import { calculateCursor } from "../cursor.js";
 import {
   ContentTypeMismatchError,
   SequenceConflictError,
@@ -254,7 +254,7 @@ export class D1Store implements StreamStore {
       messages,
       nextOffset: stream.next_offset,
       upToDate: true,
-      cursor: generateCursor(),
+      cursor: calculateCursor(),
       etag: generateETag(path, startOffset, stream.next_offset),
       contentType: stream.content_type,
     };

@@ -1,8 +1,12 @@
 import type { StreamStore } from "durable-cf-streams";
 import {
-  generateCursor,
-  getNextCursor,
+  calculateCursor,
+  generateResponseCursor,
   normalizeContentType,
+  STREAM_CURSOR_HEADER,
+  STREAM_OFFSET_HEADER,
+  STREAM_SEQ_HEADER,
+  STREAM_UP_TO_DATE_HEADER,
 } from "durable-cf-streams";
 import { MemoryStore } from "durable-cf-streams/storage/memory";
 import { Hono } from "hono";
@@ -117,7 +121,7 @@ export class StreamDO implements DurableObject {
 
     const status = result.created ? 201 : 200;
     const headers: Record<string, string> = {
-      "Stream-Next-Offset": result.nextOffset,
+      [STREAM_OFFSET_HEADER]: result.nextOffset,
       "Content-Type": normalizeContentType(contentType),
     };
     if (result.created) {
@@ -144,7 +148,7 @@ export class StreamDO implements DurableObject {
     }
 
     const seq =
-      request.headers.get("stream-seq") ??
+      request.headers.get(STREAM_SEQ_HEADER) ??
       request.headers.get("x-seq") ??
       undefined;
 
@@ -156,7 +160,7 @@ export class StreamDO implements DurableObject {
     return new Response(null, {
       status: 200,
       headers: {
-        "Stream-Next-Offset": result.nextOffset,
+        [STREAM_OFFSET_HEADER]: result.nextOffset,
       },
     });
   }
@@ -207,9 +211,9 @@ export class StreamDO implements DurableObject {
         status: 304,
         headers: {
           ETag: result.etag,
-          "Stream-Next-Offset": result.nextOffset,
-          "Stream-Cursor": result.cursor,
-          "Stream-Up-To-Date": "true",
+          [STREAM_OFFSET_HEADER]: result.nextOffset,
+          [STREAM_CURSOR_HEADER]: result.cursor,
+          [STREAM_UP_TO_DATE_HEADER]: "true",
         },
       });
     }
@@ -221,9 +225,9 @@ export class StreamDO implements DurableObject {
       headers: {
         "Content-Type": result.contentType,
         ETag: result.etag,
-        "Stream-Next-Offset": result.nextOffset,
-        "Stream-Cursor": result.cursor,
-        "Stream-Up-To-Date": result.upToDate ? "true" : "false",
+        [STREAM_OFFSET_HEADER]: result.nextOffset,
+        [STREAM_CURSOR_HEADER]: result.cursor,
+        [STREAM_UP_TO_DATE_HEADER]: result.upToDate ? "true" : "false",
       },
     });
   }
@@ -250,7 +254,7 @@ export class StreamDO implements DurableObject {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        "Stream-Cursor": generateCursor(),
+        [STREAM_CURSOR_HEADER]: calculateCursor(),
       },
     });
   }
@@ -268,7 +272,7 @@ export class StreamDO implements DurableObject {
     };
 
     const sendControl = (nextOffset: string) => {
-      const cursor = getNextCursor(clientCursor);
+      const cursor = generateResponseCursor(clientCursor);
       send(
         "control",
         JSON.stringify({
@@ -376,9 +380,9 @@ export class StreamDO implements DurableObject {
         headers: {
           "Content-Type": initial.contentType,
           ETag: initial.etag,
-          "Stream-Next-Offset": initial.nextOffset,
-          "Stream-Cursor": getNextCursor(clientCursor),
-          "Stream-Up-To-Date": "true",
+          [STREAM_OFFSET_HEADER]: initial.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
         },
       });
     }
@@ -388,9 +392,9 @@ export class StreamDO implements DurableObject {
         status: 304,
         headers: {
           ETag: initial.etag,
-          "Stream-Next-Offset": initial.nextOffset,
-          "Stream-Cursor": getNextCursor(clientCursor),
-          "Stream-Up-To-Date": "true",
+          [STREAM_OFFSET_HEADER]: initial.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
         },
       });
     }
@@ -405,9 +409,9 @@ export class StreamDO implements DurableObject {
         headers: {
           "Content-Type": current.contentType,
           ETag: current.etag,
-          "Stream-Next-Offset": current.nextOffset,
-          "Stream-Cursor": getNextCursor(clientCursor),
-          "Stream-Up-To-Date": "true",
+          [STREAM_OFFSET_HEADER]: current.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
         },
       });
     }
@@ -420,9 +424,9 @@ export class StreamDO implements DurableObject {
       headers: {
         "Content-Type": result.contentType,
         ETag: result.etag,
-        "Stream-Next-Offset": result.nextOffset,
-        "Stream-Cursor": getNextCursor(clientCursor),
-        "Stream-Up-To-Date": "true",
+        [STREAM_OFFSET_HEADER]: result.nextOffset,
+        [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+        [STREAM_UP_TO_DATE_HEADER]: "true",
       },
     });
   }
@@ -439,7 +443,7 @@ export class StreamDO implements DurableObject {
       headers: {
         "Content-Type": result.contentType,
         ETag: result.etag,
-        "Stream-Next-Offset": result.nextOffset,
+        [STREAM_OFFSET_HEADER]: result.nextOffset,
       },
     });
   }

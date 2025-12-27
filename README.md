@@ -35,6 +35,22 @@ pnpm run build       # build all packages
 pnpm run test        # run all tests
 ```
 
+## bumping durable-streams
+
+when the upstream protocol changes:
+
+```bash
+# 1. update all durable-streams packages
+pnpm update @durable-streams/client @durable-streams/server -r
+pnpm update @durable-streams/server-conformance-tests -r --filter "./examples/*"
+
+# 2. build and test
+pnpm run build
+pnpm run test
+
+# 3. fix any failures, repeat
+```
+
 ## license
 
 mit

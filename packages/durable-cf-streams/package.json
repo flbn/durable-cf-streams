@@ -60,6 +60,8 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@durable-streams/client": "^0.1.0",
+    "@durable-streams/server": "^0.1.0",
     "effect": "^3.19.13"
   },
   "devDependencies": {

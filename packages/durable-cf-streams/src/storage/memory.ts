@@ -1,5 +1,5 @@
 import { Deferred, Effect } from "effect";
-import { generateCursor } from "../cursor.js";
+import { calculateCursor } from "../cursor.js";
 import {
   ContentTypeMismatchError,
   SequenceConflictError,
@@ -197,7 +197,7 @@ export class MemoryStore implements StreamStore {
       messages,
       nextOffset: stream.nextOffset,
       upToDate: true,
-      cursor: generateCursor(),
+      cursor: calculateCursor(),
       etag: generateETag(path, startOffset, stream.nextOffset),
       contentType: stream.metadata.contentType,
     });

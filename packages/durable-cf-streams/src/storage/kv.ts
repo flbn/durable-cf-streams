@@ -1,5 +1,5 @@
 import { Deferred, Effect } from "effect";
-import { generateCursor } from "../cursor.js";
+import { calculateCursor } from "../cursor.js";
 import {
   ContentTypeMismatchError,
   SequenceConflictError,
@@ -224,7 +224,7 @@ export class KVStore implements StreamStore {
       messages,
       nextOffset: meta.nextOffset,
       upToDate: true,
-      cursor: generateCursor(),
+      cursor: calculateCursor(),
       etag: generateETag(path, startOffset, meta.nextOffset),
       contentType: meta.contentType,
     };

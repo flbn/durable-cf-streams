@@ -1,6 +1,8 @@
 import {
   isValidOffset,
   normalizeOffset,
+  STREAM_EXPIRES_AT_HEADER,
+  STREAM_TTL_HEADER,
   validateExpiresAt,
   validateTTL,
 } from "durable-cf-streams";
@@ -10,8 +12,8 @@ export type TtlExpiresResult =
   | { ok: false; error: Response };
 
 export function parseTtlAndExpires(request: Request): TtlExpiresResult {
-  const ttlHeader = request.headers.get("stream-ttl");
-  const expiresAtHeader = request.headers.get("stream-expires-at");
+  const ttlHeader = request.headers.get(STREAM_TTL_HEADER);
+  const expiresAtHeader = request.headers.get(STREAM_EXPIRES_AT_HEADER);
 
   if (ttlHeader && expiresAtHeader) {
     return {

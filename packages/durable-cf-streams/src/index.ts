@@ -1,11 +1,23 @@
 // biome-ignore lint: performance/noBarrelFile: bleh, its a library
 export {
-  compareCursors,
-  generateCursor,
-  getNextCursor,
-  isNewerCursor,
-  isValidCursor,
-  parseCursor,
+  CURSOR_QUERY_PARAM,
+  decodeStreamPath,
+  encodeStreamPath,
+  LIVE_QUERY_PARAM,
+  OFFSET_QUERY_PARAM,
+  SSE_COMPATIBLE_CONTENT_TYPES,
+  STREAM_CURSOR_HEADER,
+  STREAM_EXPIRES_AT_HEADER,
+  STREAM_OFFSET_HEADER,
+  STREAM_SEQ_HEADER,
+  STREAM_TTL_HEADER,
+  STREAM_UP_TO_DATE_HEADER,
+} from "./const.js";
+export {
+  calculateCursor,
+  DEFAULT_CURSOR_EPOCH,
+  DEFAULT_CURSOR_INTERVAL_SECONDS,
+  generateResponseCursor,
 } from "./cursor.js";
 export {
   ContentTypeMismatchError,

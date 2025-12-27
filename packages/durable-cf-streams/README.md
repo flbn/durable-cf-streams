@@ -1,6 +1,6 @@
 # durable-cf-streams
 
-building blocks for [durable streams](https://github.com/durable-streams) on cloudflare. storage backends and utilities. the idea is that you can borrow utilities and wire up http (or whatever) however you want.
+building blocks for [durable streams](https://github.com/durable-streams/durable-streams) on cloudflare. storage backends and utilities. the idea is that you can borrow utilities and wire up http (or whatever) however you want.
 
 ## install
 
@@ -45,6 +45,40 @@ interface StreamStore {
 }
 ```
 
+## protocol constants
+
+re-exported from `@durable-streams/client` and `@durable-streams/server` for convenience:
+
+```typescript
+import {
+  // header constants
+  STREAM_OFFSET_HEADER,     // "Stream-Next-Offset"
+  STREAM_CURSOR_HEADER,     // "Stream-Cursor"
+  STREAM_UP_TO_DATE_HEADER, // "Stream-Up-To-Date"
+  STREAM_SEQ_HEADER,        // "Stream-Seq"
+  STREAM_TTL_HEADER,        // "Stream-TTL"
+  STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
+
+  // query param constants
+  OFFSET_QUERY_PARAM,       // "offset"
+  LIVE_QUERY_PARAM,         // "live"
+  CURSOR_QUERY_PARAM,       // "cursor"
+
+  // sse
+  SSE_COMPATIBLE_CONTENT_TYPES,
+
+  // path encoding
+  encodeStreamPath,
+  decodeStreamPath,
+
+  // cursor utilities
+  calculateCursor,
+  generateResponseCursor,
+  DEFAULT_CURSOR_EPOCH,
+  DEFAULT_CURSOR_INTERVAL_SECONDS,
+} from "durable-cf-streams";
+```
+
 ## utilities
 
 ```typescript
@@ -55,17 +89,21 @@ import {
   compareOffsets,
   isValidOffset,
   initialOffset,
-  
-  // cursors
-  generateCursor,
-  getNextCursor,
+  isSentinelOffset,
+  normalizeOffset,
+  advanceOffset,
+  incrementSeq,
   
   // protocol
   normalizeContentType,
+  isJsonContentType,
   validateTTL,
   validateExpiresAt,
   generateETag,
-  isJsonContentType,
+  parseETag,
+  processJsonAppend,
+  formatJsonResponse,
+  validateJsonCreate,
 } from "durable-cf-streams";
 ```
 
@@ -80,6 +118,7 @@ import {
   ContentTypeMismatchError,
   StreamConflictError,
   InvalidJsonError,
+  InvalidOffsetError,
   PayloadTooLargeError,
 } from "durable-cf-streams";
 
@@ -99,7 +138,10 @@ switch (error._tag) {
 
 ```typescript
 import { MemoryStore } from "durable-cf-streams/storage/memory";
-import { normalizeContentType } from "durable-cf-streams";
+import {
+  normalizeContentType,
+  STREAM_OFFSET_HEADER,
+} from "durable-cf-streams";
 
 export class StreamDO implements DurableObject {
   private store = new MemoryStore();
@@ -118,11 +160,11 @@ export class StreamDO implements DurableObject {
 
       return new Response(null, {
         status: result.created ? 201 : 200,
-        headers: { "Stream-Next-Offset": result.nextOffset },
+        headers: { [STREAM_OFFSET_HEADER]: result.nextOffset },
       });
     }
 
-    ...
+    // ...
   }
 }
 ```
