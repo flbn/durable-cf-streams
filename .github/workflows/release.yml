@@ -1,15 +1,30 @@
 name: release
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
   id-token: write
 
 jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: node
+          package-name: durable-cf-streams
+          path: packages/durable-cf-streams
+          changelog-path: CHANGELOG.md
+
   publish:
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: npm
     steps:
