@@ -9,9 +9,9 @@
     "types": "wrangler types"
   },
   "devDependencies": {
-    "@durable-streams/server-conformance-tests": "^0.1.4",
+    "@durable-streams/server-conformance-tests": "^0.1.6",
     "vitest": "^4.0.16",
-    "wrangler": "^4.54.0"
+    "wrangler": "^4.57.0"
   },
   "dependencies": {
     "durable-cf-streams": "workspace:*"
