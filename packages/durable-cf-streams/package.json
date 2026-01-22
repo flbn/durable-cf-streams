@@ -64,10 +64,10 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "effect": "^3.19.14"
+    "effect": "^3.19.15"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260101.0",
+    "@cloudflare/workers-types": "^4.20260122.0",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },
