@@ -6,14 +6,14 @@ import type {
   ProducerValidationResult,
   Stream,
   StreamMessage,
-} from "@durable-streams/server/handler";
+} from "@durable-streams/server/types";
+import { PayloadTooLargeError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
   isJsonContentType,
   isMetadataExpired,
 } from "../protocol.js";
-import { PayloadTooLargeError } from "../errors.js";
 import {
   mergeData,
   prepareInitialData,
@@ -49,7 +49,7 @@ type ProducerRow = {
 type Waiter = {
   offset: string;
   resolve: (result: {
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }) => void;
@@ -90,7 +90,9 @@ const PRODUCERS_SCHEMA = `
 `;
 
 function parseClosedBy(raw: string | null): ClosedBy | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   try {
     return JSON.parse(raw) as ClosedBy;
   } catch {
@@ -121,7 +123,6 @@ export class SqliteStore implements DurableStreamStore {
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly streamCache = new Map<string, CachedStream>();
   private readonly pathLocks = new Map<string, Promise<unknown>>();
-  private readonly producerLocks = new Map<string, Promise<unknown>>();
 
   static schema = [STREAMS_SCHEMA, PRODUCERS_SCHEMA];
 
@@ -143,7 +144,9 @@ export class SqliteStore implements DurableStreamStore {
       .exec("SELECT * FROM streams WHERE path = ?", path)
       .toArray() as StreamRow[];
 
-    if (rows.length === 0) return null;
+    if (rows.length === 0) {
+      return null;
+    }
 
     const row = rows[0] as StreamRow;
     if (isRowExpired(row)) {
@@ -214,6 +217,7 @@ export class SqliteStore implements DurableStreamStore {
     return this.getStreamRow(path) !== null;
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: protocol requires these checks
   create(
     path: string,
     options: {
@@ -262,13 +266,20 @@ export class SqliteStore implements DurableStreamStore {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message.toLowerCase() : String(err);
-      if (msg.includes("too big") || msg.includes("toobig") || msg.includes("sqlite_error")) {
+      if (
+        msg.includes("too big") ||
+        msg.includes("toobig") ||
+        msg.includes("sqlite_error")
+      ) {
         throw new PayloadTooLargeError(0, data.length);
       }
       throw err;
     }
 
-    const row = this.getStreamRow(path)!;
+    const row = this.getStreamRow(path);
+    if (!row) {
+      throw new Error(`Stream not found after creation: ${path}`);
+    }
     return this.buildStream(row);
   }
 
@@ -276,7 +287,9 @@ export class SqliteStore implements DurableStreamStore {
     const cached = this.streamCache.get(path);
     if (!cached) {
       const row = this.getStreamRow(path);
-      if (!row) return undefined;
+      if (!row) {
+        return undefined;
+      }
       return this.buildStream(row);
     }
     if (isMetadataExpired(cached)) {
@@ -299,14 +312,16 @@ export class SqliteStore implements DurableStreamStore {
   read(
     path: string,
     offset?: string
-  ): { messages: Array<StreamMessage>; upToDate: boolean } {
+  ): { messages: StreamMessage[]; upToDate: boolean } {
     const row = this.getStreamRow(path);
-    if (!row) throw new Error(`Stream not found: ${path}`);
+    if (!row) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const startOffset = offset ?? initialOffset();
     const byteOffset = offsetToBytePos(startOffset);
     const data = new Uint8Array(row.data);
-    const messages: Array<StreamMessage> = [];
+    const messages: StreamMessage[] = [];
 
     if (byteOffset < data.length) {
       messages.push({
@@ -319,9 +334,11 @@ export class SqliteStore implements DurableStreamStore {
     return { messages, upToDate: true };
   }
 
-  formatResponse(path: string, messages: Array<StreamMessage>): Uint8Array {
+  formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
     const cached = this.streamCache.get(path);
-    if (!cached) return new Uint8Array(0);
+    if (!cached) {
+      return new Uint8Array(0);
+    }
 
     if (messages.length === 0) {
       const isJson = isJsonContentType(cached.contentType);
@@ -346,12 +363,14 @@ export class SqliteStore implements DurableStreamStore {
     offset: string,
     timeoutMs: number
   ): Promise<{
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }> {
     const row = this.getStreamRow(path);
-    if (!row) return Promise.reject(new Error(`Stream not found: ${path}`));
+    if (!row) {
+      return Promise.reject(new Error(`Stream not found: ${path}`));
+    }
 
     const data = new Uint8Array(row.data);
     const byteOffset = offsetToBytePos(offset);
@@ -359,7 +378,11 @@ export class SqliteStore implements DurableStreamStore {
     if (byteOffset < data.length) {
       return Promise.resolve({
         messages: [
-          { offset: row.next_offset, timestamp: Date.now(), data: data.slice(byteOffset) },
+          {
+            offset: row.next_offset,
+            timestamp: Date.now(),
+            data: data.slice(byteOffset),
+          },
         ],
         timedOut: false,
       });
@@ -410,10 +433,14 @@ export class SqliteStore implements DurableStreamStore {
     options?: AppendOptions
   ): StreamMessage | AppendResult {
     const row = this.getStreamRow(path);
-    if (!row) throw new Error(`Stream not found: ${path}`);
+    if (!row) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const closedResult = this.handleClosedAppend(row, options);
-    if (closedResult) return closedResult;
+    if (closedResult) {
+      return closedResult;
+    }
 
     validateAppendContentType(row.content_type, options?.contentType);
     validateAppendSeq(row.last_seq ?? undefined, options?.seq);
@@ -452,14 +479,13 @@ export class SqliteStore implements DurableStreamStore {
     const release = await this.acquirePathLock(path);
     try {
       const row = this.getStreamRow(path);
-      if (!row) return null;
+      if (!row) {
+        return null;
+      }
 
       const alreadyClosed = row.closed === 1;
 
-      this.sql.exec(
-        "UPDATE streams SET closed = 1 WHERE path = ?",
-        path
-      );
+      this.sql.exec("UPDATE streams SET closed = 1 WHERE path = ?", path);
 
       this.updateCache(path, { closed: true });
       this.notifyWaitersClosed(path);
@@ -488,7 +514,9 @@ export class SqliteStore implements DurableStreamStore {
 
   delete(path: string): boolean {
     const row = this.getStreamRow(path);
-    if (!row) return false;
+    if (!row) {
+      return false;
+    }
 
     this.cancelWaitersForPath(path);
     this.streamCache.delete(path);
@@ -517,10 +545,10 @@ export class SqliteStore implements DurableStreamStore {
     return row?.next_offset;
   }
 
-  list(): Array<string> {
-    const rows = this.sql
-      .exec("SELECT path FROM streams")
-      .toArray() as Array<{ path: string }>;
+  list(): string[] {
+    const rows = this.sql.exec("SELECT path FROM streams").toArray() as Array<{
+      path: string;
+    }>;
     return rows.map((r) => r.path);
   }
 
@@ -561,7 +589,11 @@ export class SqliteStore implements DurableStreamStore {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message.toLowerCase() : String(err);
-      if (msg.includes("too big") || msg.includes("toobig") || msg.includes("sqlite_error")) {
+      if (
+        msg.includes("too big") ||
+        msg.includes("toobig") ||
+        msg.includes("sqlite_error")
+      ) {
         throw new PayloadTooLargeError(0, newData.length);
       }
       throw err;
@@ -580,7 +612,9 @@ export class SqliteStore implements DurableStreamStore {
     row: StreamRow,
     options?: AppendOptions
   ): AppendResult | null {
-    if (row.closed !== 1) return null;
+    if (row.closed !== 1) {
+      return null;
+    }
 
     if (this.isDuplicateClosingRequest(row, options)) {
       return {
@@ -588,7 +622,7 @@ export class SqliteStore implements DurableStreamStore {
         streamClosed: true,
         producerResult: {
           status: "duplicate",
-          lastSeq: options!.producerSeq!,
+          lastSeq: options?.producerSeq ?? 0,
         },
       };
     }
@@ -600,9 +634,13 @@ export class SqliteStore implements DurableStreamStore {
     row: StreamRow,
     options?: AppendOptions
   ): boolean {
-    if (!options?.producerId) return false;
+    if (!options?.producerId) {
+      return false;
+    }
     const closedBy = parseClosedBy(row.closed_by);
-    if (!closedBy) return false;
+    if (!closedBy) {
+      return false;
+    }
     return (
       closedBy.producerId === options.producerId &&
       closedBy.epoch === options.producerEpoch &&
@@ -639,16 +677,25 @@ export class SqliteStore implements DurableStreamStore {
     options: AppendOptions
   ): AppendResult {
     const row = this.getStreamRow(path);
-    if (!row) throw new Error(`Stream not found: ${path}`);
+    if (!row) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const closedResult = this.handleClosedAppend(row, options);
-    if (closedResult) return closedResult;
+    if (closedResult) {
+      return closedResult;
+    }
+
+    const { producerId, producerEpoch, producerSeq } = options;
+    if (!producerId || producerEpoch == null || producerSeq == null) {
+      throw new Error("Producer fields are required for validated append");
+    }
 
     const producerResult = this.validateProducer(
       row.path,
-      options.producerId!,
-      options.producerEpoch!,
-      options.producerSeq!
+      producerId,
+      producerEpoch,
+      producerSeq
     );
 
     if (producerResult.status !== "accepted") {
@@ -683,7 +730,9 @@ export class SqliteStore implements DurableStreamStore {
     producerResult?: ProducerValidationResult;
   } | null {
     const row = this.getStreamRow(path);
-    if (!row) return null;
+    if (!row) {
+      return null;
+    }
 
     if (row.closed === 1) {
       return this.handleAlreadyClosedWithProducer(row, options);
@@ -822,7 +871,9 @@ export class SqliteStore implements DurableStreamStore {
     }
 
     if (epoch > state.epoch) {
-      if (seq !== 0) return { status: "invalid_epoch_seq" };
+      if (seq !== 0) {
+        return { status: "invalid_epoch_seq" };
+      }
       return {
         status: "accepted",
         isNew: true,
@@ -855,7 +906,9 @@ export class SqliteStore implements DurableStreamStore {
     path: string,
     result: ProducerValidationResult
   ): void {
-    if (result.status !== "accepted") return;
+    if (result.status !== "accepted") {
+      return;
+    }
 
     this.sql.exec(
       `INSERT INTO producers (path, producer_id, epoch, last_seq, last_updated)
@@ -902,35 +955,15 @@ export class SqliteStore implements DurableStreamStore {
     };
   }
 
-  private async acquireProducerLock(
-    path: string,
-    producerId: string
-  ): Promise<() => void> {
-    const lockKey = `${path}:${producerId}`;
-
-    while (this.producerLocks.has(lockKey)) {
-      await this.producerLocks.get(lockKey);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-    this.producerLocks.set(lockKey, lockPromise);
-
-    return () => {
-      this.producerLocks.delete(lockKey);
-      releaseLock!();
-    };
-  }
-
   // ---------------------------------------------------------------------------
   // Waiter management
   // ---------------------------------------------------------------------------
 
   private notifyWaiters(path: string): void {
     const row = this.getStreamRow(path);
-    if (!row) return;
+    if (!row) {
+      return;
+    }
 
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
@@ -980,7 +1013,9 @@ export class SqliteStore implements DurableStreamStore {
 
   private removeWaiter(path: string, waiter: Waiter): void {
     const list = this.waiters.get(path);
-    if (!list) return;
+    if (!list) {
+      return;
+    }
     const index = list.indexOf(waiter);
     if (index !== -1) {
       list.splice(index, 1);

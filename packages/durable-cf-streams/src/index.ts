@@ -1,19 +1,19 @@
 // biome-ignore lint: performance/noBarrelFile: bleh, its a library
 export {
-  DurableStreamHandler,
   createFetchHandler,
+  DurableStreamHandler,
   type FetchHandlerOptions,
 } from "@durable-streams/server/handler";
 export type {
-  Stream,
-  StreamMessage,
-  DurableStreamStore,
   AppendOptions as HandlerAppendOptions,
   AppendResult as HandlerAppendResult,
+  DurableStreamStore,
+  MaybePromise,
   ProducerState,
   ProducerValidationResult,
-  MaybePromise,
-} from "@durable-streams/server/handler";
+  Stream,
+  StreamMessage,
+} from "@durable-streams/server/types";
 export {
   CURSOR_QUERY_PARAM,
   LIVE_QUERY_PARAM,

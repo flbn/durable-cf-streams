@@ -25,8 +25,12 @@ export const validateIdempotentCreate = (
   existing: IdempotentCreateInfo,
   options: CreateOptions
 ): void => {
-  const existingNormalized = normalizeContentType(existing.contentType ?? "application/octet-stream");
-  const reqNormalized = normalizeContentType(options.contentType ?? "application/octet-stream");
+  const existingNormalized = normalizeContentType(
+    existing.contentType ?? "application/octet-stream"
+  );
+  const reqNormalized = normalizeContentType(
+    options.contentType ?? "application/octet-stream"
+  );
 
   const configMatch =
     existingNormalized === reqNormalized &&
@@ -49,7 +53,9 @@ export type PreparedData = {
 
 export const prepareInitialData = (options: CreateOptions): PreparedData => {
   let data = options.initialData ?? new Uint8Array(0);
-  const isJson = isJsonContentType(options.contentType ?? "application/octet-stream");
+  const isJson = isJsonContentType(
+    options.contentType ?? "application/octet-stream"
+  );
 
   if (isJson && data.length > 0) {
     data = validateJsonCreate(data, true);

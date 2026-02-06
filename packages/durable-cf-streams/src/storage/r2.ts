@@ -6,7 +6,7 @@ import type {
   ProducerValidationResult,
   Stream,
   StreamMessage,
-} from "@durable-streams/server/handler";
+} from "@durable-streams/server/types";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
@@ -66,7 +66,6 @@ export class R2Store implements DurableStreamStore {
   private readonly streamCache = new Map<string, CachedStream>();
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly pathLocks = new Map<string, Promise<unknown>>();
-  private readonly producerLocks = new Map<string, Promise<unknown>>();
 
   constructor(bucket: R2Bucket) {
     this.bucket = bucket;
@@ -332,7 +331,11 @@ export class R2Store implements DurableStreamStore {
     if (byteOffset < data.length) {
       return {
         messages: [
-          { offset: meta.nextOffset, timestamp: Date.now(), data: data.slice(byteOffset) },
+          {
+            offset: meta.nextOffset,
+            timestamp: Date.now(),
+            data: data.slice(byteOffset),
+          },
         ],
         timedOut: false,
       };
@@ -557,7 +560,7 @@ export class R2Store implements DurableStreamStore {
         streamClosed: true,
         producerResult: {
           status: "duplicate",
-          lastSeq: options?.producerSeq!,
+          lastSeq: options?.producerSeq ?? 0,
         },
       };
     }
@@ -584,8 +587,8 @@ export class R2Store implements DurableStreamStore {
     if (options.producerId !== undefined) {
       meta.closedBy = {
         producerId: options.producerId,
-        epoch: options.producerEpoch!,
-        seq: options.producerSeq!,
+        epoch: options.producerEpoch ?? 0,
+        seq: options.producerSeq ?? 0,
       };
     }
   }
@@ -611,6 +614,15 @@ export class R2Store implements DurableStreamStore {
     data: Uint8Array,
     options: AppendOptions
   ): Promise<AppendResult> {
+    const { producerId, producerEpoch, producerSeq } = options;
+    if (
+      producerId === undefined ||
+      producerEpoch === undefined ||
+      producerSeq === undefined
+    ) {
+      throw new Error("Producer fields are required for validated append");
+    }
+
     const meta = await this.getValidMetadata(path);
     if (!meta) {
       throw new Error(`Stream not found: ${path}`);
@@ -624,9 +636,9 @@ export class R2Store implements DurableStreamStore {
     const producers = await this.getProducers(path);
     const producerResult = this.validateProducer(
       producers,
-      options.producerId!,
-      options.producerEpoch!,
-      options.producerSeq!
+      producerId,
+      producerEpoch,
+      producerSeq
     );
 
     if (producerResult.status !== "accepted") {
@@ -869,28 +881,6 @@ export class R2Store implements DurableStreamStore {
 
     return () => {
       this.pathLocks.delete(path);
-      releaseLock?.();
-    };
-  }
-
-  private async acquireProducerLock(
-    path: string,
-    producerId: string
-  ): Promise<() => void> {
-    const lockKey = `${path}:${producerId}`;
-
-    while (this.producerLocks.has(lockKey)) {
-      await this.producerLocks.get(lockKey);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-    this.producerLocks.set(lockKey, lockPromise);
-
-    return () => {
-      this.producerLocks.delete(lockKey);
       releaseLock?.();
     };
   }

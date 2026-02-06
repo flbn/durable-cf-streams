@@ -1,38 +1,64 @@
 {
-  "formatter": "language_server",
   "format_on_save": "on",
   "languages": {
     "JavaScript": {
+      "format_on_save": "on",
       "formatter": {
-        "language_server": {
-          "name": "biome"
+        "external": {
+          "command": "npx",
+          "arguments": [
+            "biome",
+            "format",
+            "--write",
+            "--stdin-file-path",
+            "{buffer_path}"
+          ]
         }
-      },
-      "code_actions_on_format": {
-        "source.fixAll.biome": true,
-        "source.organizeImports.biome": true
       }
     },
     "TypeScript": {
+      "format_on_save": "on",
       "formatter": {
-        "language_server": {
-          "name": "biome"
+        "external": {
+          "command": "npx",
+          "arguments": [
+            "biome",
+            "format",
+            "--write",
+            "--stdin-file-path",
+            "{buffer_path}"
+          ]
         }
-      },
-      "code_actions_on_format": {
-        "source.fixAll.biome": true,
-        "source.organizeImports.biome": true
       }
     },
     "TSX": {
+      "format_on_save": "on",
       "formatter": {
-        "language_server": {
-          "name": "biome"
+        "external": {
+          "command": "npx",
+          "arguments": [
+            "biome",
+            "format",
+            "--write",
+            "--stdin-file-path",
+            "{buffer_path}"
+          ]
         }
-      },
-      "code_actions_on_format": {
-        "source.fixAll.biome": true,
-        "source.organizeImports.biome": true
+      }
+    },
+    "JSON": {
+      "format_on_save": "on",
+      "formatter": {
+        "external": {
+          "command": "npx",
+          "arguments": [
+            "biome",
+            "format",
+            "--write",
+            "--stdin-file-path",
+            "{buffer_path}"
+          ]
+        }
       }
     }
   },

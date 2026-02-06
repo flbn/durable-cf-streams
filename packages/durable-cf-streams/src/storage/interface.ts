@@ -1,1 +1,1 @@
-export type { DurableStreamStore } from "@durable-streams/server/handler";
+export type { DurableStreamStore } from "@durable-streams/server/types";

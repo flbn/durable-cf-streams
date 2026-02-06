@@ -6,7 +6,7 @@ import type {
   ProducerValidationResult,
   Stream,
   StreamMessage,
-} from "@durable-streams/server/handler";
+} from "@durable-streams/server/types";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
@@ -23,6 +23,7 @@ import {
 } from "./utils.js";
 
 const PRODUCER_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const STREAM_KEY_PATTERN = /^stream:(.+):(meta|data|producers)$/;
 
 type StreamRecord = {
   contentType: string;
@@ -54,7 +55,7 @@ type CachedStream = {
 type Waiter = {
   offset: string;
   resolve: (result: {
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }) => void;
@@ -66,7 +67,6 @@ export class KVStore implements DurableStreamStore {
   private readonly streamCache = new Map<string, CachedStream>();
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly pathLocks = new Map<string, Promise<unknown>>();
-  private readonly producerLocks = new Map<string, Promise<unknown>>();
 
   constructor(kv: KVNamespace) {
     this.kv = kv;
@@ -129,7 +129,9 @@ export class KVStore implements DurableStreamStore {
       this.producersKey(path),
       "json"
     );
-    if (!record) return new Map();
+    if (!record) {
+      return new Map();
+    }
     return new Map(Object.entries(record));
   }
 
@@ -238,14 +240,16 @@ export class KVStore implements DurableStreamStore {
   async read(
     path: string,
     offset?: string
-  ): Promise<{ messages: Array<StreamMessage>; upToDate: boolean }> {
+  ): Promise<{ messages: StreamMessage[]; upToDate: boolean }> {
     const meta = await this.getValidMetadata(path);
-    if (!meta) throw new Error(`Stream not found: ${path}`);
+    if (!meta) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const data = await this.getData(path);
     const startOffset = offset ?? initialOffset();
     const byteOffset = offsetToBytePos(startOffset);
-    const messages: Array<StreamMessage> = [];
+    const messages: StreamMessage[] = [];
 
     if (byteOffset < data.length) {
       messages.push({
@@ -258,12 +262,11 @@ export class KVStore implements DurableStreamStore {
     return { messages, upToDate: true };
   }
 
-  async formatResponse(
-    path: string,
-    messages: Array<StreamMessage>
-  ): Promise<Uint8Array> {
+  formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
     const cached = this.streamCache.get(path);
-    if (!cached) return new Uint8Array(0);
+    if (!cached) {
+      return new Uint8Array(0);
+    }
 
     if (messages.length === 0) {
       const isJson = isJsonContentType(cached.contentType);
@@ -280,7 +283,12 @@ export class KVStore implements DurableStreamStore {
     }
 
     const isJson = isJsonContentType(cached.contentType);
-    return isJson ? formatJsonResponse(combined) : combined;
+
+    if (isJson) {
+      return formatJsonResponse(combined);
+    }
+
+    return combined;
   }
 
   async waitForMessages(
@@ -288,12 +296,14 @@ export class KVStore implements DurableStreamStore {
     offset: string,
     timeoutMs: number
   ): Promise<{
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }> {
     const meta = await this.getValidMetadata(path);
-    if (!meta) throw new Error(`Stream not found: ${path}`);
+    if (!meta) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const data = await this.getData(path);
     const byteOffset = offsetToBytePos(offset);
@@ -301,7 +311,11 @@ export class KVStore implements DurableStreamStore {
     if (byteOffset < data.length) {
       return {
         messages: [
-          { offset: meta.nextOffset, timestamp: Date.now(), data: data.slice(byteOffset) },
+          {
+            offset: meta.nextOffset,
+            timestamp: Date.now(),
+            data: data.slice(byteOffset),
+          },
         ],
         timedOut: false,
       };
@@ -343,10 +357,14 @@ export class KVStore implements DurableStreamStore {
     options?: AppendOptions
   ): Promise<StreamMessage | AppendResult> {
     const meta = await this.getValidMetadata(path);
-    if (!meta) throw new Error(`Stream not found: ${path}`);
+    if (!meta) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const closedResult = this.handleClosedAppend(meta, options);
-    if (closedResult) return closedResult;
+    if (closedResult) {
+      return closedResult;
+    }
 
     validateAppendContentType(meta.contentType, options?.contentType);
     validateAppendSeq(meta.lastSeq, options?.seq);
@@ -392,7 +410,9 @@ export class KVStore implements DurableStreamStore {
     const release = await this.acquirePathLock(path);
     try {
       const meta = await this.getValidMetadata(path);
-      if (!meta) return null;
+      if (!meta) {
+        return null;
+      }
 
       const alreadyClosed = meta.closed;
       meta.closed = true;
@@ -428,7 +448,9 @@ export class KVStore implements DurableStreamStore {
     this.streamCache.delete(path);
 
     const meta = await this.kv.get(this.metaKey(path), "json");
-    if (!meta) return false;
+    if (!meta) {
+      return false;
+    }
 
     await Promise.all([
       this.kv.delete(this.metaKey(path)),
@@ -460,12 +482,12 @@ export class KVStore implements DurableStreamStore {
     return meta?.nextOffset;
   }
 
-  async list(): Promise<Array<string>> {
+  async list(): Promise<string[]> {
     const result = await this.kv.list({ prefix: "stream:" });
     const paths = new Set<string>();
 
     for (const key of result.keys) {
-      const match = /^stream:(.+):(meta|data|producers)$/.exec(key.name);
+      const match = STREAM_KEY_PATTERN.exec(key.name);
       if (match?.[1]) {
         paths.add(match[1]);
       }
@@ -503,7 +525,9 @@ export class KVStore implements DurableStreamStore {
     meta: StreamRecord,
     options?: AppendOptions
   ): AppendResult | null {
-    if (!meta.closed) return null;
+    if (!meta.closed) {
+      return null;
+    }
 
     if (this.isDuplicateClosingRequest(meta, options)) {
       return {
@@ -511,7 +535,7 @@ export class KVStore implements DurableStreamStore {
         streamClosed: true,
         producerResult: {
           status: "duplicate",
-          lastSeq: options!.producerSeq!,
+          lastSeq: options?.producerSeq ?? 0,
         },
       };
     }
@@ -523,7 +547,9 @@ export class KVStore implements DurableStreamStore {
     meta: StreamRecord,
     options?: AppendOptions
   ): boolean {
-    if (!options?.producerId || !meta.closedBy) return false;
+    if (!(options?.producerId && meta.closedBy)) {
+      return false;
+    }
     return (
       meta.closedBy.producerId === options.producerId &&
       meta.closedBy.epoch === options.producerEpoch &&
@@ -536,8 +562,8 @@ export class KVStore implements DurableStreamStore {
     if (options.producerId !== undefined) {
       meta.closedBy = {
         producerId: options.producerId,
-        epoch: options.producerEpoch!,
-        seq: options.producerSeq!,
+        epoch: options.producerEpoch ?? 0,
+        seq: options.producerSeq ?? 0,
       };
     }
   }
@@ -552,18 +578,33 @@ export class KVStore implements DurableStreamStore {
     options: AppendOptions
   ): Promise<AppendResult> {
     const meta = await this.getValidMetadata(path);
-    if (!meta) throw new Error(`Stream not found: ${path}`);
+    if (!meta) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const closedResult = this.handleClosedAppend(meta, options);
-    if (closedResult) return closedResult;
+    if (closedResult) {
+      return closedResult;
+    }
+
+    const producerId = options.producerId;
+    const producerEpoch = options.producerEpoch;
+    const producerSeq = options.producerSeq;
+    if (
+      producerId === undefined ||
+      producerEpoch === undefined ||
+      producerSeq === undefined
+    ) {
+      throw new Error("Producer options are required for validated append");
+    }
 
     const producers = await this.getProducers(path);
 
     const producerResult = this.validateProducer(
       producers,
-      options.producerId!,
-      options.producerEpoch!,
-      options.producerSeq!
+      producerId,
+      producerEpoch,
+      producerSeq
     );
 
     if (producerResult.status !== "accepted") {
@@ -617,7 +658,9 @@ export class KVStore implements DurableStreamStore {
     producerResult?: ProducerValidationResult;
   } | null> {
     const meta = await this.getValidMetadata(path);
-    if (!meta) return null;
+    if (!meta) {
+      return null;
+    }
 
     if (meta.closed) {
       return this.handleAlreadyClosedWithProducer(meta, options);
@@ -742,7 +785,9 @@ export class KVStore implements DurableStreamStore {
     }
 
     if (epoch > state.epoch) {
-      if (seq !== 0) return { status: "invalid_epoch_seq" };
+      if (seq !== 0) {
+        return { status: "invalid_epoch_seq" };
+      }
       return {
         status: "accepted",
         isNew: true,
@@ -775,13 +820,13 @@ export class KVStore implements DurableStreamStore {
     producers: Map<string, ProducerState>,
     result: ProducerValidationResult
   ): void {
-    if (result.status !== "accepted") return;
+    if (result.status !== "accepted") {
+      return;
+    }
     producers.set(result.producerId, result.proposedState);
   }
 
-  private cleanupExpiredProducers(
-    producers: Map<string, ProducerState>
-  ): void {
+  private cleanupExpiredProducers(producers: Map<string, ProducerState>): void {
     const now = Date.now();
     for (const [id, state] of producers) {
       if (now - state.lastUpdated > PRODUCER_STATE_TTL_MS) {
@@ -807,29 +852,7 @@ export class KVStore implements DurableStreamStore {
 
     return () => {
       this.pathLocks.delete(path);
-      releaseLock!();
-    };
-  }
-
-  private async acquireProducerLock(
-    path: string,
-    producerId: string
-  ): Promise<() => void> {
-    const lockKey = `${path}:${producerId}`;
-
-    while (this.producerLocks.has(lockKey)) {
-      await this.producerLocks.get(lockKey);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-    this.producerLocks.set(lockKey, lockPromise);
-
-    return () => {
-      this.producerLocks.delete(lockKey);
-      releaseLock!();
+      releaseLock?.();
     };
   }
 
@@ -839,10 +862,14 @@ export class KVStore implements DurableStreamStore {
 
   private async notifyWaiters(path: string): Promise<void> {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters || pathWaiters.length === 0) return;
+    if (!pathWaiters || pathWaiters.length === 0) {
+      return;
+    }
 
     const meta = await this.getMetadata(path);
-    if (!meta) return;
+    if (!meta) {
+      return;
+    }
 
     const data = await this.getData(path);
     const remaining: Waiter[] = [];
@@ -871,7 +898,9 @@ export class KVStore implements DurableStreamStore {
 
   private notifyWaitersClosed(path: string): void {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters) return;
+    if (!pathWaiters) {
+      return;
+    }
 
     for (const waiter of pathWaiters) {
       clearTimeout(waiter.timer);
@@ -883,7 +912,9 @@ export class KVStore implements DurableStreamStore {
 
   private cancelWaiters(path: string): void {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters) return;
+    if (!pathWaiters) {
+      return;
+    }
 
     for (const waiter of pathWaiters) {
       clearTimeout(waiter.timer);
@@ -895,7 +926,9 @@ export class KVStore implements DurableStreamStore {
 
   private removeWaiter(path: string, waiter: Waiter): void {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters) return;
+    if (!pathWaiters) {
+      return;
+    }
 
     const index = pathWaiters.indexOf(waiter);
     if (index !== -1) {

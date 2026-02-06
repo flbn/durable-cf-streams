@@ -1,5 +1,5 @@
-// biome-ignore lint: performance/noBarrelFile: bleh, its a library
-export type { DurableStreamStore } from "@durable-streams/server/handler";
+export type { DurableStreamStore } from "@durable-streams/server/types";
+// biome-ignore lint/performance/noBarrelFile: bleh, its a library
 export { D1Store } from "./d1.js";
 export { KVStore } from "./kv.js";
 export { MemoryStore } from "./memory.js";

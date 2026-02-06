@@ -6,14 +6,14 @@ import type {
   ProducerValidationResult,
   Stream,
   StreamMessage,
-} from "@durable-streams/server/handler";
+} from "@durable-streams/server/types";
+import { PayloadTooLargeError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import {
   formatJsonResponse,
   isJsonContentType,
   isMetadataExpired,
 } from "../protocol.js";
-import { PayloadTooLargeError } from "../errors.js";
 import {
   mergeData,
   prepareInitialData,
@@ -49,7 +49,7 @@ type ProducerRow = {
 type Waiter = {
   offset: string;
   resolve: (result: {
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }) => void;
@@ -83,7 +83,6 @@ export class D1Store implements DurableStreamStore {
     }
   >();
   private readonly pathLocks = new Map<string, Promise<unknown>>();
-  private readonly producerLocks = new Map<string, Promise<unknown>>();
 
   constructor(db: D1Database) {
     this.db = db;
@@ -114,9 +113,7 @@ export class D1Store implements DurableStreamStore {
   ] as const;
 
   async initialize(): Promise<void> {
-    await this.db.batch(
-      D1Store.schema.map((stmt) => this.db.prepare(stmt))
-    );
+    await this.db.batch(D1Store.schema.map((stmt) => this.db.prepare(stmt)));
   }
 
   async has(path: string): Promise<boolean> {
@@ -195,7 +192,7 @@ export class D1Store implements DurableStreamStore {
   async read(
     path: string,
     offset?: string
-  ): Promise<{ messages: Array<StreamMessage>; upToDate: boolean }> {
+  ): Promise<{ messages: StreamMessage[]; upToDate: boolean }> {
     const row = await this.fetchStreamWithData(path);
     if (!row || isRowExpired(row)) {
       throw new Error(`Stream not found: ${path}`);
@@ -204,7 +201,7 @@ export class D1Store implements DurableStreamStore {
     const startOffset = offset ?? initialOffset();
     const byteOffset = offsetToBytePos(startOffset);
     const data = new Uint8Array(row.data);
-    const messages: Array<StreamMessage> = [];
+    const messages: StreamMessage[] = [];
 
     if (byteOffset < data.length) {
       messages.push({
@@ -217,9 +214,11 @@ export class D1Store implements DurableStreamStore {
     return { messages, upToDate: true };
   }
 
-  formatResponse(path: string, messages: Array<StreamMessage>): Uint8Array {
+  formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
     const cached = this.streamCache.get(path);
-    if (!cached) return new Uint8Array(0);
+    if (!cached) {
+      return new Uint8Array(0);
+    }
 
     if (messages.length === 0) {
       const isJson = isJsonContentType(cached.contentType);
@@ -244,7 +243,7 @@ export class D1Store implements DurableStreamStore {
     offset: string,
     timeoutMs: number
   ): Promise<{
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }> {
@@ -254,7 +253,9 @@ export class D1Store implements DurableStreamStore {
     }
 
     const immediateResult = this.checkImmediateData(row, offset);
-    if (immediateResult) return immediateResult;
+    if (immediateResult) {
+      return immediateResult;
+    }
 
     if (row.closed === 1) {
       return { messages: [], timedOut: false, streamClosed: true };
@@ -287,7 +288,9 @@ export class D1Store implements DurableStreamStore {
     }
 
     const closedResult = this.handleClosedAppend(row, options);
-    if (closedResult) return closedResult;
+    if (closedResult) {
+      return closedResult;
+    }
 
     validateAppendContentType(row.content_type, options?.contentType);
     validateAppendSeq(row.last_seq ?? undefined, options?.seq);
@@ -299,7 +302,9 @@ export class D1Store implements DurableStreamStore {
     }
 
     const updatedRow = await this.fetchStreamMetadata(path);
-    if (updatedRow) this.updateCache(path, updatedRow);
+    if (updatedRow) {
+      this.updateCache(path, updatedRow);
+    }
     this.notifyWaiters(path, message);
     return message;
   }
@@ -328,7 +333,9 @@ export class D1Store implements DurableStreamStore {
     const release = await this.acquirePathLock(path);
     try {
       const row = await this.fetchStreamMetadata(path);
-      if (!row || isRowExpired(row)) return null;
+      if (!row || isRowExpired(row)) {
+        return null;
+      }
 
       const alreadyClosed = row.closed === 1;
 
@@ -409,7 +416,7 @@ export class D1Store implements DurableStreamStore {
     return row?.next_offset;
   }
 
-  async list(): Promise<Array<string>> {
+  async list(): Promise<string[]> {
     const result = await this.db
       .prepare("SELECT path FROM streams")
       .all<Pick<StreamRow, "path">>();
@@ -452,6 +459,7 @@ export class D1Store implements DurableStreamStore {
     ]);
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: protocol requires these checks
   private async insertNewStream(
     path: string,
     options: {
@@ -490,7 +498,11 @@ export class D1Store implements DurableStreamStore {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message.toLowerCase() : String(err);
-      if (msg.includes("too big") || msg.includes("toobig") || msg.includes("d1_error")) {
+      if (
+        msg.includes("too big") ||
+        msg.includes("toobig") ||
+        msg.includes("d1_error")
+      ) {
         throw new PayloadTooLargeError(0, data.length);
       }
       throw err;
@@ -570,7 +582,7 @@ export class D1Store implements DurableStreamStore {
     try {
       await this.db
         .prepare(
-          `UPDATE streams SET data = ?, next_offset = ?, last_seq = ?, append_count = ? WHERE path = ?`
+          "UPDATE streams SET data = ?, next_offset = ?, last_seq = ?, append_count = ? WHERE path = ?"
         )
         .bind(
           newData,
@@ -583,7 +595,11 @@ export class D1Store implements DurableStreamStore {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message.toLowerCase() : String(err);
-      if (msg.includes("too big") || msg.includes("toobig") || msg.includes("d1_error")) {
+      if (
+        msg.includes("too big") ||
+        msg.includes("toobig") ||
+        msg.includes("d1_error")
+      ) {
         throw new PayloadTooLargeError(0, newData.length);
       }
       throw err;
@@ -600,7 +616,9 @@ export class D1Store implements DurableStreamStore {
     row: StreamRow,
     options?: AppendOptions
   ): AppendResult | null {
-    if (row.closed !== 1) return null;
+    if (row.closed !== 1) {
+      return null;
+    }
 
     if (this.isDuplicateClosingRequest(row, options)) {
       return {
@@ -608,7 +626,7 @@ export class D1Store implements DurableStreamStore {
         streamClosed: true,
         producerResult: {
           status: "duplicate",
-          lastSeq: options!.producerSeq!,
+          lastSeq: options?.producerSeq ?? 0,
         },
       };
     }
@@ -620,7 +638,9 @@ export class D1Store implements DurableStreamStore {
     row: StreamRow,
     options?: AppendOptions
   ): boolean {
-    if (!options?.producerId || !row.closed_by) return false;
+    if (!(options?.producerId && row.closed_by)) {
+      return false;
+    }
     const closedBy = JSON.parse(row.closed_by) as {
       producerId: string;
       epoch: number;
@@ -653,22 +673,27 @@ export class D1Store implements DurableStreamStore {
     this.notifyWaitersClosed(path);
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: protocol requires these checks
   private async appendWithProducerValidation(
     path: string,
     data: Uint8Array,
     options: AppendOptions
   ): Promise<AppendResult> {
     const row = await this.fetchStreamWithData(path);
-    if (!row || isRowExpired(row)) throw new Error(`Stream not found: ${path}`);
+    if (!row || isRowExpired(row)) {
+      throw new Error(`Stream not found: ${path}`);
+    }
 
     const closedResult = this.handleClosedAppend(row, options);
-    if (closedResult) return closedResult;
+    if (closedResult) {
+      return closedResult;
+    }
 
     const producerResult = await this.validateProducer(
       path,
-      options.producerId!,
-      options.producerEpoch!,
-      options.producerSeq!
+      options.producerId ?? "",
+      options.producerEpoch ?? 0,
+      options.producerSeq ?? 0
     );
 
     if (producerResult.status !== "accepted") {
@@ -693,7 +718,9 @@ export class D1Store implements DurableStreamStore {
     }
 
     const updatedRow = await this.fetchStreamMetadata(path);
-    if (updatedRow) this.updateCache(path, updatedRow);
+    if (updatedRow) {
+      this.updateCache(path, updatedRow);
+    }
 
     if (options.close) {
       this.notifyWaitersClosed(path);
@@ -717,7 +744,9 @@ export class D1Store implements DurableStreamStore {
     producerResult?: ProducerValidationResult;
   } | null> {
     const row = await this.fetchStreamMetadata(path);
-    if (!row || isRowExpired(row)) return null;
+    if (!row || isRowExpired(row)) {
+      return null;
+    }
 
     if (row.closed === 1) {
       return this.handleAlreadyClosedWithProducer(row, options);
@@ -731,7 +760,11 @@ export class D1Store implements DurableStreamStore {
     );
 
     if (producerResult.status !== "accepted") {
-      return { finalOffset: row.next_offset, alreadyClosed: false, producerResult };
+      return {
+        finalOffset: row.next_offset,
+        alreadyClosed: false,
+        producerResult,
+      };
     }
 
     await this.commitProducerState(path, producerResult);
@@ -750,7 +783,11 @@ export class D1Store implements DurableStreamStore {
     this.updateCache(path, { ...row, closed: 1 });
     this.notifyWaitersClosed(path);
 
-    return { finalOffset: row.next_offset, alreadyClosed: false, producerResult };
+    return {
+      finalOffset: row.next_offset,
+      alreadyClosed: false,
+      producerResult,
+    };
   }
 
   private handleAlreadyClosedWithProducer(
@@ -813,7 +850,11 @@ export class D1Store implements DurableStreamStore {
     }
 
     return this.validateExistingProducer(
-      { epoch: state.epoch, lastSeq: state.last_seq, lastUpdated: state.last_updated },
+      {
+        epoch: state.epoch,
+        lastSeq: state.last_seq,
+        lastUpdated: state.last_updated,
+      },
       producerId,
       epoch,
       seq,
@@ -850,7 +891,9 @@ export class D1Store implements DurableStreamStore {
     }
 
     if (epoch > state.epoch) {
-      if (seq !== 0) return { status: "invalid_epoch_seq" };
+      if (seq !== 0) {
+        return { status: "invalid_epoch_seq" };
+      }
       return {
         status: "accepted",
         isNew: true,
@@ -883,7 +926,9 @@ export class D1Store implements DurableStreamStore {
     path: string,
     result: ProducerValidationResult
   ): Promise<void> {
-    if (result.status !== "accepted") return;
+    if (result.status !== "accepted") {
+      return;
+    }
 
     await this.db
       .prepare(
@@ -907,9 +952,7 @@ export class D1Store implements DurableStreamStore {
   private async cleanupExpiredProducers(path: string): Promise<void> {
     const cutoff = Date.now() - PRODUCER_STATE_TTL_MS;
     await this.db
-      .prepare(
-        "DELETE FROM producers WHERE path = ? AND last_updated < ?"
-      )
+      .prepare("DELETE FROM producers WHERE path = ? AND last_updated < ?")
       .bind(path, cutoff)
       .run();
   }
@@ -936,32 +979,6 @@ export class D1Store implements DurableStreamStore {
   }
 
   // ---------------------------------------------------------------------------
-  // Producer locks
-  // ---------------------------------------------------------------------------
-
-  private async acquireProducerLock(
-    path: string,
-    producerId: string
-  ): Promise<() => void> {
-    const lockKey = `${path}:${producerId}`;
-
-    while (this.producerLocks.has(lockKey)) {
-      await this.producerLocks.get(lockKey);
-    }
-
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      releaseLock = resolve;
-    });
-    this.producerLocks.set(lockKey, lockPromise);
-
-    return () => {
-      this.producerLocks.delete(lockKey);
-      releaseLock!();
-    };
-  }
-
-  // ---------------------------------------------------------------------------
   // Waiter management
   // ---------------------------------------------------------------------------
 
@@ -969,7 +986,7 @@ export class D1Store implements DurableStreamStore {
     row: StreamRow,
     offset: string
   ): {
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   } | null {
@@ -978,7 +995,13 @@ export class D1Store implements DurableStreamStore {
 
     if (byteOffset < data.length) {
       return {
-        messages: [{ offset: row.next_offset, timestamp: Date.now(), data: data.slice(byteOffset) }],
+        messages: [
+          {
+            offset: row.next_offset,
+            timestamp: Date.now(),
+            data: data.slice(byteOffset),
+          },
+        ],
         timedOut: false,
       };
     }
@@ -991,7 +1014,7 @@ export class D1Store implements DurableStreamStore {
     offset: string,
     timeoutMs: number
   ): Promise<{
-    messages: Array<StreamMessage>;
+    messages: StreamMessage[];
     timedOut: boolean;
     streamClosed?: boolean;
   }> {
@@ -1008,12 +1031,19 @@ export class D1Store implements DurableStreamStore {
     });
   }
 
-  private async notifyWaiters(path: string, _message?: StreamMessage): Promise<void> {
+  private async notifyWaiters(
+    path: string,
+    _message?: StreamMessage
+  ): Promise<void> {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters || pathWaiters.length === 0) return;
+    if (!pathWaiters || pathWaiters.length === 0) {
+      return;
+    }
 
     const row = await this.fetchStreamWithData(path);
-    if (!row) return;
+    if (!row) {
+      return;
+    }
 
     const data = new Uint8Array(row.data);
     const remaining: Waiter[] = [];
@@ -1042,7 +1072,9 @@ export class D1Store implements DurableStreamStore {
 
   private notifyWaitersClosed(path: string): void {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters || pathWaiters.length === 0) return;
+    if (!pathWaiters || pathWaiters.length === 0) {
+      return;
+    }
 
     for (const waiter of pathWaiters) {
       clearTimeout(waiter.timer);
@@ -1060,7 +1092,9 @@ export class D1Store implements DurableStreamStore {
 
   private removeWaiter(path: string, waiter: Waiter): void {
     const pathWaiters = this.waiters.get(path);
-    if (!pathWaiters) return;
+    if (!pathWaiters) {
+      return;
+    }
     const index = pathWaiters.indexOf(waiter);
     if (index !== -1) {
       pathWaiters.splice(index, 1);

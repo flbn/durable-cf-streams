@@ -1,5 +1,9 @@
 type WaitResult = {
-  readonly messages: Array<{ readonly offset: string; readonly timestamp: number; readonly data: Uint8Array }>;
+  readonly messages: Array<{
+    readonly offset: string;
+    readonly timestamp: number;
+    readonly data: Uint8Array;
+  }>;
   readonly timedOut: boolean;
   readonly streamClosed?: boolean;
 };
@@ -27,9 +31,16 @@ export class WaiterManager {
     });
   }
 
-  notify(path: string, getData: (offset: string) => { offset: string; timestamp: number; data: Uint8Array } | undefined): void {
+  notify(
+    path: string,
+    getData: (
+      offset: string
+    ) => { offset: string; timestamp: number; data: Uint8Array } | undefined
+  ): void {
     const waiters = this.waiters.get(path);
-    if (!waiters || waiters.length === 0) return;
+    if (!waiters || waiters.length === 0) {
+      return;
+    }
 
     const remaining: Waiter[] = [];
     for (const waiter of waiters) {
@@ -46,7 +57,9 @@ export class WaiterManager {
 
   notifyClosed(path: string): void {
     const waiters = this.waiters.get(path);
-    if (!waiters) return;
+    if (!waiters) {
+      return;
+    }
 
     for (const waiter of waiters) {
       clearTimeout(waiter.timer);
@@ -57,7 +70,9 @@ export class WaiterManager {
 
   cancelForPath(path: string): void {
     const waiters = this.waiters.get(path);
-    if (!waiters) return;
+    if (!waiters) {
+      return;
+    }
 
     for (const waiter of waiters) {
       clearTimeout(waiter.timer);
@@ -75,7 +90,9 @@ export class WaiterManager {
 
   private removeWaiter(path: string, waiter: Waiter): void {
     const list = this.waiters.get(path);
-    if (!list) return;
+    if (!list) {
+      return;
+    }
     const idx = list.indexOf(waiter);
     if (idx !== -1) {
       list.splice(idx, 1);

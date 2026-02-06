@@ -1,12 +1,12 @@
-export type { 
-  Stream,
-  StreamMessage,
-  DurableStreamStore,
+export type {
   AppendOptions,
   AppendResult,
+  DurableStreamStore,
+  MaybePromise,
   ProducerState,
   ProducerValidationResult,
-  MaybePromise,
-} from "@durable-streams/server/handler";
+  Stream,
+  StreamMessage,
+} from "@durable-streams/server/types";
 
 export type Offset = string;
