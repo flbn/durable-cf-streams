@@ -1,5 +1,20 @@
 // biome-ignore lint: performance/noBarrelFile: bleh, its a library
 export {
+  DurableStreamHandler,
+  createFetchHandler,
+  type FetchHandlerOptions,
+} from "@durable-streams/server/handler";
+export type {
+  Stream,
+  StreamMessage,
+  DurableStreamStore,
+  AppendOptions as HandlerAppendOptions,
+  AppendResult as HandlerAppendResult,
+  ProducerState,
+  ProducerValidationResult,
+  MaybePromise,
+} from "@durable-streams/server/handler";
+export {
   CURSOR_QUERY_PARAM,
   LIVE_QUERY_PARAM,
   OFFSET_QUERY_PARAM,
@@ -55,17 +70,4 @@ export {
   validateJsonCreate,
   validateTTL,
 } from "./protocol.js";
-export type { StreamStore } from "./storage/interface.js";
-export type {
-  AppendOptions,
-  AppendResult,
-  GetOptions,
-  GetResult,
-  HeadResult,
-  Offset,
-  PutOptions,
-  PutResult,
-  StreamMessage,
-  StreamMetadata,
-  WaitResult,
-} from "./types.js";
+export type { Offset } from "./types.js";

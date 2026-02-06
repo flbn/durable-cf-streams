@@ -29,9 +29,5 @@
   "dependencies": {
     "durable-cf-streams": "workspace:*"
   },
-  "pnpm": {
-    "overrides": {
-      "@durable-streams/client": "^0.1.0"
-    }
-  }
+  "pnpm": {}
 }

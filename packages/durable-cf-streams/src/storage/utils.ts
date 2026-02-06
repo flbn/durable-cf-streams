@@ -1,8 +1,3 @@
-import {
-  ContentTypeMismatchError,
-  SequenceConflictError,
-  StreamConflictError,
-} from "../errors.js";
 import { formatOffset } from "../offsets.js";
 import {
   isJsonContentType,
@@ -10,31 +5,39 @@ import {
   processJsonAppend,
   validateJsonCreate,
 } from "../protocol.js";
-import type { PutOptions } from "../types.js";
 
 export type IdempotentCreateInfo = {
-  readonly contentType: string;
+  readonly contentType?: string;
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
+  readonly closed?: boolean;
+};
+
+export type CreateOptions = {
+  readonly contentType?: string;
+  readonly ttlSeconds?: number;
+  readonly expiresAt?: string;
+  readonly initialData?: Uint8Array;
+  readonly closed?: boolean;
 };
 
 export const validateIdempotentCreate = (
   existing: IdempotentCreateInfo,
-  options: PutOptions
+  options: CreateOptions
 ): void => {
-  const existingNormalized = normalizeContentType(existing.contentType);
-  const reqNormalized = normalizeContentType(options.contentType);
+  const existingNormalized = normalizeContentType(existing.contentType ?? "application/octet-stream");
+  const reqNormalized = normalizeContentType(options.contentType ?? "application/octet-stream");
 
-  if (existingNormalized !== reqNormalized) {
-    throw new ContentTypeMismatchError(existingNormalized, reqNormalized);
-  }
+  const configMatch =
+    existingNormalized === reqNormalized &&
+    (options.ttlSeconds ?? undefined) === (existing.ttlSeconds ?? undefined) &&
+    (options.expiresAt ?? undefined) === (existing.expiresAt ?? undefined) &&
+    (options.closed ?? false) === (existing.closed ?? false);
 
-  if (options.ttlSeconds !== existing.ttlSeconds) {
-    throw new StreamConflictError("TTL mismatch on idempotent create");
-  }
-
-  if (options.expiresAt !== existing.expiresAt) {
-    throw new StreamConflictError("Expires-At mismatch on idempotent create");
+  if (!configMatch) {
+    throw new Error(
+      `Stream already exists with different configuration: ${existing.contentType}`
+    );
   }
 };
 
@@ -44,9 +47,9 @@ export type PreparedData = {
   readonly nextOffset: string;
 };
 
-export const prepareInitialData = (options: PutOptions): PreparedData => {
-  let data = options.data ?? new Uint8Array(0);
-  const isJson = isJsonContentType(options.contentType);
+export const prepareInitialData = (options: CreateOptions): PreparedData => {
+  let data = options.initialData ?? new Uint8Array(0);
+  const isJson = isJsonContentType(options.contentType ?? "application/octet-stream");
 
   if (isJson && data.length > 0) {
     data = validateJsonCreate(data, true);
@@ -70,7 +73,9 @@ export const validateAppendContentType = (
   const reqNormalized = normalizeContentType(requestContentType);
 
   if (streamNormalized !== reqNormalized) {
-    throw new ContentTypeMismatchError(streamNormalized, reqNormalized);
+    throw new Error(
+      `Content-type mismatch: expected ${streamContentType}, got ${requestContentType}`
+    );
   }
 };
 
@@ -83,7 +88,7 @@ export const validateAppendSeq = (
   }
 
   if (requestSeq <= lastSeq) {
-    throw new SequenceConflictError(`> ${lastSeq}`, requestSeq);
+    throw new Error(`Sequence conflict: ${requestSeq} <= ${lastSeq}`);
   }
 };
 

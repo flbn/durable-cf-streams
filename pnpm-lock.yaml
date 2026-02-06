@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@durable-streams/client': ^0.1.0
-
 importers:
 
   .:
@@ -32,8 +29,8 @@ importers:
         version: link:../../packages/durable-cf-streams
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -51,8 +48,8 @@ importers:
         version: 4.11.2
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -70,8 +67,8 @@ importers:
         version: 5.0.22
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -86,8 +83,8 @@ importers:
         version: link:../../packages/durable-cf-streams
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -102,8 +99,8 @@ importers:
         version: link:../../packages/durable-cf-streams
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -118,8 +115,8 @@ importers:
         version: link:../../packages/durable-cf-streams
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -134,8 +131,8 @@ importers:
         version: link:../../packages/durable-cf-streams
     devDependencies:
       '@durable-streams/server-conformance-tests':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.2.1
+        version: 0.2.1
       vitest:
         specifier: ^4.0.18
         version: 4.0.18
@@ -145,9 +142,9 @@ importers:
 
   packages/durable-cf-streams:
     dependencies:
-      effect:
-        specifier: ^3.19.15
-        version: 3.19.15
+      '@durable-streams/server':
+        specifier: link:../../../durable-streams/packages/server
+        version: link:../../../durable-streams/packages/server
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20260122.0
@@ -270,12 +267,12 @@ packages:
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
 
-  '@durable-streams/client@0.1.5':
-    resolution: {integrity: sha512-vZu55GqSebViYx+L+Ff6Xfr1SOZPPwvJqPLIOtUIzv5WtMJ6e4wWtHDFqCa4OhQyN7MeczVzgo7/u6IIJnQXuA==}
+  '@durable-streams/client@0.2.1':
+    resolution: {integrity: sha512-+mGdK6TuDR9fJPo8jw6DufPfoUv6g+27xoPES76GXQc6y3val9Oe/SK2o2FV9sqqLSE19HEUSxTp0D6CZebfZw==}
     engines: {node: '>=18.0.0'}
 
-  '@durable-streams/server-conformance-tests@0.2.0':
-    resolution: {integrity: sha512-5YyoFOo45VdDAiv3ZzAFCGQwxnjCEqHpfFawb8M+mp5VaVp0hbEOwxsdnFQGRAWF63BoQWgDkc7MWohZSUCHoQ==}
+  '@durable-streams/server-conformance-tests@0.2.1':
+    resolution: {integrity: sha512-Us94fOweskeGqWNkQJo1sYyPtHuvYR8BYVmpJtaJEWWNkrkXFKcirfIOsC1vdCVJJyTwSXM3ZV8EuP9vpgSNhw==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -1754,14 +1751,14 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@durable-streams/client@0.1.5':
+  '@durable-streams/client@0.2.1':
     dependencies:
       '@microsoft/fetch-event-source': 2.0.1
       fastq: 1.20.1
 
-  '@durable-streams/server-conformance-tests@0.2.0':
+  '@durable-streams/server-conformance-tests@0.2.1':
     dependencies:
-      '@durable-streams/client': 0.1.5
+      '@durable-streams/client': 0.2.1
       fast-check: 4.5.3
       vitest: 4.0.18
     transitivePeerDependencies:
@@ -2350,6 +2347,7 @@ snapshots:
     dependencies:
       '@standard-schema/spec': 1.1.0
       fast-check: 3.23.2
+    optional: true
 
   error-stack-parser-es@1.0.5: {}
 
@@ -2422,6 +2420,7 @@ snapshots:
   fast-check@3.23.2:
     dependencies:
       pure-rand: 6.1.0
+    optional: true
 
   fast-check@4.5.3:
     dependencies:
@@ -2563,7 +2562,8 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  pure-rand@6.1.0: {}
+  pure-rand@6.1.0:
+    optional: true
 
   pure-rand@7.0.1: {}
 

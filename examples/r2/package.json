@@ -9,7 +9,7 @@
     "types": "wrangler types"
   },
   "devDependencies": {
-    "@durable-streams/server-conformance-tests": "^0.2.0",
+    "@durable-streams/server-conformance-tests": "^0.2.1",
     "vitest": "^4.0.18",
     "wrangler": "^4.60.0"
   },

@@ -14,5 +14,4 @@ export default defineConfig({
   dts: true,
   clean: true,
   outDir: "dist",
-  noExternal: ["effect"],
 });

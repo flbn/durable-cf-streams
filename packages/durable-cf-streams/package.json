@@ -64,7 +64,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "effect": "^3.19.15"
+    "@durable-streams/server": "link:../../../durable-streams/packages/server"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260122.0",

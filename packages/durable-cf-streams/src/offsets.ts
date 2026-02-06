@@ -5,7 +5,7 @@ export type ParsedOffset = {
   readonly pos: number;
 };
 
-const OFFSET_REGEX = /^[0-9a-f]{16}_[0-9a-f]{16}$/;
+const OFFSET_REGEX = /^\d{16}_\d{16}$/;
 const INITIAL_OFFSET = "0000000000000000_0000000000000000";
 const SENTINEL_OFFSET = "-1";
 
@@ -24,17 +24,17 @@ export const parseOffset = (offset: string): ParsedOffset | null => {
   if (!OFFSET_REGEX.test(offset)) {
     return null;
   }
-  const [seqHex, posHex] = offset.split("_") as [string, string];
+  const [seqStr, posStr] = offset.split("_") as [string, string];
   return {
-    seq: Number.parseInt(seqHex, 16),
-    pos: Number.parseInt(posHex, 16),
+    seq: Number(seqStr),
+    pos: Number(posStr),
   };
 };
 
 export const formatOffset = (seq: number, pos: number): Offset => {
-  const seqHex = seq.toString(16).padStart(16, "0");
-  const posHex = pos.toString(16).padStart(16, "0");
-  return `${seqHex}_${posHex}`;
+  const seqStr = String(seq).padStart(16, "0");
+  const posStr = String(pos).padStart(16, "0");
+  return `${seqStr}_${posStr}`;
 };
 
 export const compareOffsets = (a: Offset, b: Offset): -1 | 0 | 1 => {

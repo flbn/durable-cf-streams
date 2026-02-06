@@ -1,5 +1,5 @@
 import { InvalidJsonError } from "./errors.js";
-import type { Offset, StreamMetadata } from "./types.js";
+import type { Offset } from "./types.js";
 
 export type ExpirationInfo = {
   readonly ttlSeconds?: number;
@@ -27,7 +27,7 @@ export const isExpired = (info: ExpirationInfo): boolean => {
   return false;
 };
 
-export const isMetadataExpired = (metadata: StreamMetadata): boolean =>
+export const isMetadataExpired = (metadata: ExpirationInfo): boolean =>
   isExpired(metadata);
 
 const TTL_REGEX = /^[1-9][0-9]*$/;
@@ -108,8 +108,8 @@ export const processJsonAppend = (
   let parsed: unknown;
   try {
     parsed = JSON.parse(newStr);
-  } catch (e) {
-    throw new InvalidJsonError(e instanceof Error ? e.message : "Invalid JSON");
+  } catch {
+    throw new InvalidJsonError("Invalid JSON");
   }
 
   const items: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
@@ -149,8 +149,8 @@ export const validateJsonCreate = (
   let parsed: unknown;
   try {
     parsed = JSON.parse(str);
-  } catch (e) {
-    throw new InvalidJsonError(e instanceof Error ? e.message : "Invalid JSON");
+  } catch {
+    throw new InvalidJsonError("Invalid JSON");
   }
 
   let items: unknown[];
