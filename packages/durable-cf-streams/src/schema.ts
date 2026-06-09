@@ -42,6 +42,7 @@ export const PersistedStreamMetadataSchema = Schema.Struct({
   lastSeq: Schema.optional(Schema.String),
   appendCount: Schema.Number,
   producers: ProducerStateMapSchema,
+  closed: Schema.optional(Schema.Boolean),
 });
 
 export type PersistedStreamMetadata = Schema.Schema.Type<

@@ -1,7 +1,7 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
-import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { initialOffset, offsetToBytePos } from "../offsets.js";
 import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
@@ -27,7 +27,9 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
-  mergeData,
+  appendResult,
+  closedAppendResult,
+  prepareAppendData,
   prepareInitialData,
   validateAppendContentType,
   validateAppendSeq,
@@ -68,7 +70,11 @@ export class KVStore implements StreamStore {
 
     if (existingMeta && !isExpired(existingMeta)) {
       validateIdempotentCreate(existingMeta, options);
-      return { created: false, nextOffset: existingMeta.nextOffset };
+      return {
+        created: false,
+        nextOffset: existingMeta.nextOffset,
+        closed: existingMeta.closed,
+      };
     }
 
     if (existingMeta) {
@@ -88,6 +94,7 @@ export class KVStore implements StreamStore {
       nextOffset,
       appendCount,
       producers: {},
+      closed: options.closed === true,
     };
 
     await Promise.all([
@@ -97,7 +104,7 @@ export class KVStore implements StreamStore {
 
     this.streamCache.set(path, { contentType: options.contentType });
 
-    return { created: true, nextOffset };
+    return { created: true, nextOffset, closed: meta.closed };
   }
 
   async append(
@@ -111,16 +118,33 @@ export class KVStore implements StreamStore {
       throw new StreamNotFoundError(path);
     }
 
-    validateAppendContentType(meta.contentType, options?.contentType);
     const producers = meta.producers;
     const producerDecision = evaluateProducerAppend(
       producers,
       options?.producer
     );
+    const closedResult = closedAppendResult(
+      path,
+      meta.nextOffset,
+      meta.closed === true,
+      data,
+      options,
+      producerDecision
+    );
+    if (closedResult) {
+      return closedResult;
+    }
+
+    if (data.length > 0) {
+      validateAppendContentType(meta.contentType, options?.contentType);
+    }
+
     if (producerDecision._tag === "Duplicate") {
       return {
         nextOffset: meta.nextOffset,
         producer: producerDecision.result,
+        closed: meta.closed,
+        appended: false,
       };
     }
     validateAppendSeq(meta.lastSeq, options?.seq);
@@ -130,33 +154,36 @@ export class KVStore implements StreamStore {
       ? new Uint8Array(existingRaw)
       : new Uint8Array(0);
 
-    const isJson = isJsonContentType(meta.contentType);
-    const newData = mergeData(existingData, data, isJson);
-
-    const newAppendCount = meta.appendCount + 1;
-    const nextOffset = formatOffset(newAppendCount, newData.length);
+    const append = prepareAppendData(
+      existingData,
+      data,
+      meta.contentType,
+      meta.appendCount,
+      meta.nextOffset
+    );
 
     const updatedMeta: StreamRecord = {
       ...meta,
-      nextOffset,
+      nextOffset: append.nextOffset,
       lastSeq: options?.seq ?? meta.lastSeq,
-      appendCount: newAppendCount,
+      appendCount: append.appendCount,
       producers: commitProducerAppend(producers, producerDecision),
+      closed: options?.close === true,
     };
 
     await Promise.all([
       this.kv.put(this.metaKey(path), JSON.stringify(updatedMeta)),
-      this.kv.put(this.dataKey(path), newData),
+      this.kv.put(this.dataKey(path), append.data),
     ]);
 
-    this.notifyWaiters(path, newData);
+    this.notifyWaiters(path, append.data, updatedMeta.closed === true);
 
-    return {
-      nextOffset,
-      ...(producerDecision._tag === "Accepted"
-        ? { producer: producerDecision.result }
-        : {}),
-    };
+    return appendResult(
+      updatedMeta.nextOffset,
+      updatedMeta.closed === true,
+      append.appended,
+      producerDecision
+    );
   }
 
   async get(path: string, options?: GetOptions): Promise<GetResult> {
@@ -192,6 +219,7 @@ export class KVStore implements StreamStore {
       cursor: calculateCursor(),
       etag: generateETag(path, startOffset, meta.nextOffset),
       contentType: meta.contentType,
+      closed: meta.closed === true,
     };
   }
 
@@ -209,6 +237,7 @@ export class KVStore implements StreamStore {
       contentType: meta.contentType,
       nextOffset: meta.nextOffset,
       etag: generateETag(path, initialOffset(), meta.nextOffset),
+      closed: meta.closed === true,
     };
   }
 
@@ -254,7 +283,12 @@ export class KVStore implements StreamStore {
           { offset, timestamp: Date.now(), data: data.slice(byteOffset) },
         ],
         timedOut: false,
+        closed: meta.closed,
       };
+    }
+
+    if (meta.closed === true) {
+      return { messages: [], timedOut: false, closed: true };
     }
 
     const effect = Effect.gen(this, function* () {
@@ -313,7 +347,7 @@ export class KVStore implements StreamStore {
     return isJson ? formatJsonResponse(combined) : combined;
   }
 
-  private notifyWaiters(path: string, data: Uint8Array): void {
+  private notifyWaiters(path: string, data: Uint8Array, closed = false): void {
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
 
@@ -330,6 +364,14 @@ export class KVStore implements StreamStore {
             },
           ],
           timedOut: false,
+          closed,
+        });
+      }
+      if (closed) {
+        return Deferred.succeed(waiter.deferred, {
+          messages: [],
+          timedOut: false,
+          closed: true,
         });
       }
       const remaining = this.waiters.get(path) ?? [];

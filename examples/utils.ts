@@ -2,6 +2,7 @@ import type { AppendResult, Offset, StreamStore } from "durable-cf-streams";
 import {
   CACHE_CONTROL_HEADER,
   HEAD_CACHE_CONTROL_VALUE,
+  isSSETextCompatibleContentType,
   isStreamError,
   isValidOffset,
   normalizeOffset,
@@ -13,6 +14,7 @@ import {
   ProducerFencedError,
   ProducerSequenceConflictError,
   parseProducerHeaders,
+  STREAM_CLOSED_HEADER,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_TTL_HEADER,
@@ -25,6 +27,8 @@ import {
 export type AsyncQueue = <T>(operation: () => Promise<T>) => Promise<T>;
 
 export const LIVE_WAIT_TIMEOUT_MS = 20_000;
+
+export type SSEDataEncoding = "base64";
 
 export function createAsyncQueue(): AsyncQueue {
   let tail: Promise<unknown> = Promise.resolve();
@@ -95,22 +99,31 @@ export function parseTtlAndExpires(request: Request): TtlExpiresResult {
 }
 
 export type LiveModeResult =
-  | { mode: "sse" | "long-poll" | "simple" }
+  | { mode: "sse" }
+  | { mode: "long-poll" | "simple" }
   | { mode: "error"; error: Response };
+
+function requestedLiveMode(
+  liveParam: string | null,
+  acceptHeader: string
+): "sse" | "long-poll" | "simple" {
+  if (liveParam === "sse" || acceptHeader.includes("text/event-stream")) {
+    return "sse";
+  }
+  return liveParam === "long-poll" ? "long-poll" : "simple";
+}
 
 export function parseLiveMode(
   url: URL,
   request: Request,
   offset: Offset | undefined
 ): LiveModeResult {
-  const liveParam = url.searchParams.get("live");
-  const acceptHeader = request.headers.get("accept") ?? "";
+  const mode = requestedLiveMode(
+    url.searchParams.get("live"),
+    request.headers.get("accept") ?? ""
+  );
 
-  const isSSE =
-    liveParam === "sse" || acceptHeader.includes("text/event-stream");
-  const isLongPoll = liveParam === "long-poll";
-
-  if ((isSSE || isLongPoll) && offset === undefined) {
+  if (mode !== "simple" && offset === undefined) {
     return {
       mode: "error",
       error: new Response("Offset parameter required for live mode", {
@@ -119,13 +132,7 @@ export function parseLiveMode(
     };
   }
 
-  if (isSSE) {
-    return { mode: "sse" };
-  }
-  if (isLongPoll) {
-    return { mode: "long-poll" };
-  }
-  return { mode: "simple" };
+  return { mode };
 }
 
 export type OffsetParseResult =
@@ -180,8 +187,165 @@ export async function resolveReadOffset(
   return { ok: true, offset: head.nextOffset, isTail: true };
 }
 
+export type SSEEncodingResult =
+  | { ok: true; encoding: SSEDataEncoding | undefined }
+  | { ok: false; error: Response };
+
+export async function resolveSSEEncoding(
+  store: StreamStore,
+  path: string
+): Promise<SSEEncodingResult> {
+  const head = await store.head(path);
+  if (!head) {
+    return {
+      ok: false,
+      error: new Response(`Stream not found: ${path}`, { status: 404 }),
+    };
+  }
+
+  return {
+    ok: true,
+    encoding: isSSETextCompatibleContentType(head.contentType)
+      ? undefined
+      : "base64",
+  };
+}
+
+type ResolvedLiveMode =
+  | { mode: "sse"; encoding: SSEDataEncoding | undefined }
+  | { mode: "long-poll" | "simple" };
+
+export type ReadRequestResult =
+  | {
+      ok: true;
+      offset: Offset | undefined;
+      isTail: boolean;
+      liveMode: ResolvedLiveMode;
+    }
+  | { ok: false; error: Response };
+
+export async function resolveReadRequest(
+  store: StreamStore,
+  path: string,
+  url: URL,
+  request: Request
+): Promise<ReadRequestResult> {
+  const offsetResult = parseOffsetParam(url.searchParams.get("offset"));
+  if (!offsetResult.ok) {
+    return offsetResult;
+  }
+
+  const resolvedOffset = await resolveReadOffset(store, path, offsetResult);
+  if (!resolvedOffset.ok) {
+    return resolvedOffset;
+  }
+
+  const liveMode = parseLiveMode(url, request, resolvedOffset.offset);
+  if (liveMode.mode === "error") {
+    return { ok: false, error: liveMode.error };
+  }
+
+  if (liveMode.mode !== "sse") {
+    return {
+      ok: true,
+      offset: resolvedOffset.offset,
+      isTail: resolvedOffset.isTail,
+      liveMode,
+    };
+  }
+
+  const encodingResult = await resolveSSEEncoding(store, path);
+  if (!encodingResult.ok) {
+    return encodingResult;
+  }
+
+  return {
+    ok: true,
+    offset: resolvedOffset.offset,
+    isTail: resolvedOffset.isTail,
+    liveMode: { mode: "sse", encoding: encodingResult.encoding },
+  };
+}
+
+type SSELoopState = {
+  currentOffset: Offset;
+};
+
+export type SendSSEControl = (offset: Offset, closed?: boolean) => void;
+export type SendSSEData = (data: Uint8Array, contentType: string) => void;
+
+export async function sendSSESnapshot(
+  store: StreamStore,
+  path: string,
+  state: SSELoopState,
+  sendControl: SendSSEControl,
+  sendData: SendSSEData
+): Promise<boolean> {
+  const result = await store.get(path, { offset: state.currentOffset });
+
+  if (result.messages.length > 0) {
+    const body = store.formatResponse(path, result.messages);
+    sendData(body, result.contentType);
+    state.currentOffset = result.nextOffset;
+  }
+
+  sendControl(state.currentOffset, result.closed);
+  return result.closed;
+}
+
+async function sendSSETimeoutControl(
+  store: StreamStore,
+  path: string,
+  state: SSELoopState,
+  sendControl: SendSSEControl
+): Promise<boolean> {
+  const current = await store.get(path, { offset: state.currentOffset });
+  sendControl(current.nextOffset, current.closed);
+  return current.closed;
+}
+
+export async function pumpSSEStream(
+  store: StreamStore,
+  path: string,
+  state: SSELoopState & { cancelled: boolean },
+  timeoutMs: number,
+  sendControl: SendSSEControl,
+  sendData: SendSSEData
+): Promise<void> {
+  if (!store.has(path)) {
+    throw new Error("Stream not found");
+  }
+
+  if (await sendSSESnapshot(store, path, state, sendControl, sendData)) {
+    return;
+  }
+
+  while (!state.cancelled) {
+    if (!store.has(path)) {
+      throw new Error("Stream not found");
+    }
+
+    const wait = await store.waitForData(path, state.currentOffset, timeoutMs);
+    const closed = wait.timedOut
+      ? await sendSSETimeoutControl(store, path, state, sendControl)
+      : await sendSSESnapshot(store, path, state, sendControl, sendData);
+
+    if (closed) {
+      return;
+    }
+  }
+}
+
 export function parseProducerOptions(request: Request) {
   return parseProducerHeaders(request.headers);
+}
+
+export function isStreamClosedRequest(request: Request): boolean {
+  return request.headers.get(STREAM_CLOSED_HEADER)?.toLowerCase() === "true";
+}
+
+export function streamClosedHeaders(closed: boolean | undefined): HeadersInit {
+  return closed === true ? { [STREAM_CLOSED_HEADER]: "true" } : {};
 }
 
 export function appendResponse(result: AppendResult): Response {
@@ -189,13 +353,20 @@ export function appendResponse(result: AppendResult): Response {
     [STREAM_OFFSET_HEADER]: result.nextOffset,
   });
 
+  if (result.closed === true) {
+    headers.set(STREAM_CLOSED_HEADER, "true");
+  }
+
   if (result.producer) {
     headers.set(PRODUCER_EPOCH_HEADER, String(result.producer.epoch));
     headers.set(PRODUCER_SEQ_HEADER, String(result.producer.seq));
   }
 
   return new Response(null, {
-    status: result.producer && !result.producer.duplicate ? 200 : 204,
+    status:
+      result.producer && !result.producer.duplicate && result.appended === true
+        ? 200
+        : 204,
     headers,
   });
 }
@@ -207,6 +378,11 @@ export function tailOffsetCacheHeaders(isTail: boolean): HeadersInit {
 export function mapError(error: unknown): Response {
   if (isStreamError(error)) {
     const headers = new Headers();
+
+    if (error._tag === "StreamClosedError") {
+      headers.set(STREAM_CLOSED_HEADER, "true");
+      headers.set(STREAM_OFFSET_HEADER, error.nextOffset);
+    }
 
     if (error instanceof ProducerSequenceConflictError) {
       headers.set(PRODUCER_EXPECTED_SEQ_HEADER, error.expected);

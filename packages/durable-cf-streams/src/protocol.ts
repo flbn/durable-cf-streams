@@ -50,11 +50,26 @@ export const isJsonContentType = (contentType: string): boolean => {
   return normalized === "application/json" || normalized.endsWith("+json");
 };
 
+export const isSSETextCompatibleContentType = (
+  contentType: string
+): boolean => {
+  const normalized = normalizeContentType(contentType);
+  return normalized.startsWith("text/") || isJsonContentType(normalized);
+};
+
 export const encodeSSEData = (data: string): string =>
   data
     .split(SSE_LINE_ENDING)
     .map((line) => `data:${line}`)
     .join("\n");
+
+export const encodeBase64Data = (data: Uint8Array): string => {
+  let binary = "";
+  for (let offset = 0; offset < data.length; offset += 0x80_00) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + 0x80_00));
+  }
+  return btoa(binary);
+};
 
 export const validateTTL = (ttl: string): number | null => {
   if (!TTL_REGEX.test(ttl)) {

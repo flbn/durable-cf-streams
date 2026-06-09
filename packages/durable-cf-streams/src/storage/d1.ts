@@ -1,7 +1,7 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
-import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { initialOffset, offsetToBytePos } from "../offsets.js";
 import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
@@ -24,7 +24,9 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
-  mergeData,
+  appendResult,
+  closedAppendResult,
+  prepareAppendData,
   prepareInitialData,
   validateAppendContentType,
   validateAppendSeq,
@@ -42,6 +44,7 @@ type StreamRow = {
   last_seq: string | null;
   producers: string;
   append_count: number;
+  closed: number;
 };
 
 type Waiter = {
@@ -70,16 +73,24 @@ export class D1Store implements StreamStore {
   }
 
   static schema =
-    "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, data BLOB NOT NULL DEFAULT x'', next_offset TEXT NOT NULL, last_seq TEXT, producers TEXT NOT NULL DEFAULT '{}', append_count INTEGER NOT NULL DEFAULT 0);";
+    "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, data BLOB NOT NULL DEFAULT x'', next_offset TEXT NOT NULL, last_seq TEXT, producers TEXT NOT NULL DEFAULT '{}', append_count INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0);";
 
   async initialize(): Promise<void> {
     await this.db.exec(D1Store.schema);
+    const columns = await this.db.prepare("PRAGMA table_info(streams)").all<{
+      name: string;
+    }>();
+    if (!columns.results.some((column) => column.name === "closed")) {
+      await this.db.exec(
+        "ALTER TABLE streams ADD COLUMN closed INTEGER NOT NULL DEFAULT 0"
+      );
+    }
   }
 
   async put(path: string, options: PutOptions): Promise<PutResult> {
     const existing = await this.db
       .prepare(
-        "SELECT content_type, ttl_seconds, expires_at, created_at, next_offset FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, next_offset, closed FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
@@ -90,6 +101,7 @@ export class D1Store implements StreamStore {
           | "expires_at"
           | "created_at"
           | "next_offset"
+          | "closed"
         >
       >();
 
@@ -99,10 +111,15 @@ export class D1Store implements StreamStore {
           contentType: existing.content_type,
           ttlSeconds: existing.ttl_seconds ?? undefined,
           expiresAt: existing.expires_at ?? undefined,
+          closed: existing.closed === 1,
         },
         options
       );
-      return { created: false, nextOffset: existing.next_offset };
+      return {
+        created: false,
+        nextOffset: existing.next_offset,
+        closed: existing.closed === 1,
+      };
     }
 
     if (existing) {
@@ -116,8 +133,8 @@ export class D1Store implements StreamStore {
 
     await this.db
       .prepare(`
-        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, producers, append_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, producers, append_count, closed)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .bind(
         path,
@@ -128,13 +145,14 @@ export class D1Store implements StreamStore {
         data,
         nextOffset,
         "{}",
-        appendCount
+        appendCount,
+        options.closed === true ? 1 : 0
       )
       .run();
 
     this.streamCache.set(path, { contentType: options.contentType });
 
-    return { created: true, nextOffset };
+    return { created: true, nextOffset, closed: options.closed };
   }
 
   async append(
@@ -144,7 +162,7 @@ export class D1Store implements StreamStore {
   ): Promise<AppendResult> {
     const stream = await this.db
       .prepare(
-        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset, last_seq, producers, append_count FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset, last_seq, producers, append_count, closed FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
@@ -159,6 +177,7 @@ export class D1Store implements StreamStore {
           | "last_seq"
           | "producers"
           | "append_count"
+          | "closed"
         >
       >();
 
@@ -166,57 +185,77 @@ export class D1Store implements StreamStore {
       throw new StreamNotFoundError(path);
     }
 
-    validateAppendContentType(stream.content_type, options?.contentType);
     const producers = decodeProducerStateMapJson(stream.producers);
     const producerDecision = evaluateProducerAppend(
       producers,
       options?.producer
     );
+    const closedResult = closedAppendResult(
+      path,
+      stream.next_offset,
+      stream.closed === 1,
+      data,
+      options,
+      producerDecision
+    );
+    if (closedResult) {
+      return closedResult;
+    }
+
+    if (data.length > 0) {
+      validateAppendContentType(stream.content_type, options?.contentType);
+    }
+
     if (producerDecision._tag === "Duplicate") {
       return {
         nextOffset: stream.next_offset,
         producer: producerDecision.result,
+        closed: stream.closed === 1,
+        appended: false,
       };
     }
     validateAppendSeq(stream.last_seq ?? undefined, options?.seq);
 
     const existingData = new Uint8Array(stream.data);
-    const isJson = isJsonContentType(stream.content_type);
-    const newData = mergeData(existingData, data, isJson);
-
-    const newAppendCount = stream.append_count + 1;
-    const nextOffset = formatOffset(newAppendCount, newData.length);
+    const append = prepareAppendData(
+      existingData,
+      data,
+      stream.content_type,
+      stream.append_count,
+      stream.next_offset
+    );
 
     await this.db
       .prepare(`
         UPDATE streams
-        SET data = ?, next_offset = ?, last_seq = ?, producers = ?, append_count = ?
+        SET data = ?, next_offset = ?, last_seq = ?, producers = ?, append_count = ?, closed = ?
         WHERE path = ?
       `)
       .bind(
-        newData,
-        nextOffset,
+        append.data,
+        append.nextOffset,
         options?.seq ?? stream.last_seq,
         JSON.stringify(commitProducerAppend(producers, producerDecision)),
-        newAppendCount,
+        append.appendCount,
+        options?.close === true ? 1 : 0,
         path
       )
       .run();
 
-    this.notifyWaiters(path, newData);
+    this.notifyWaiters(path, append.data, options?.close === true);
 
-    return {
-      nextOffset,
-      ...(producerDecision._tag === "Accepted"
-        ? { producer: producerDecision.result }
-        : {}),
-    };
+    return appendResult(
+      append.nextOffset,
+      options?.close === true,
+      append.appended,
+      producerDecision
+    );
   }
 
   async get(path: string, options?: GetOptions): Promise<GetResult> {
     const stream = await this.db
       .prepare(
-        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset, closed FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
@@ -228,6 +267,7 @@ export class D1Store implements StreamStore {
           | "created_at"
           | "data"
           | "next_offset"
+          | "closed"
         >
       >();
 
@@ -259,13 +299,14 @@ export class D1Store implements StreamStore {
       cursor: calculateCursor(),
       etag: generateETag(path, startOffset, stream.next_offset),
       contentType: stream.content_type,
+      closed: stream.closed === 1,
     };
   }
 
   async head(path: string): Promise<HeadResult | null> {
     const stream = await this.db
       .prepare(
-        "SELECT content_type, ttl_seconds, expires_at, created_at, next_offset FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, next_offset, closed FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
@@ -276,6 +317,7 @@ export class D1Store implements StreamStore {
           | "expires_at"
           | "created_at"
           | "next_offset"
+          | "closed"
         >
       >();
 
@@ -290,6 +332,7 @@ export class D1Store implements StreamStore {
       contentType: stream.content_type,
       nextOffset: stream.next_offset,
       etag: generateETag(path, initialOffset(), stream.next_offset),
+      closed: stream.closed === 1,
     };
   }
 
@@ -320,11 +363,14 @@ export class D1Store implements StreamStore {
   ): Promise<WaitResult> {
     const stream = await this.db
       .prepare(
-        "SELECT ttl_seconds, expires_at, created_at, data FROM streams WHERE path = ?"
+        "SELECT ttl_seconds, expires_at, created_at, data, closed FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
-        Pick<StreamRow, "ttl_seconds" | "expires_at" | "created_at" | "data">
+        Pick<
+          StreamRow,
+          "ttl_seconds" | "expires_at" | "created_at" | "data" | "closed"
+        >
       >();
 
     if (!stream || isRowExpired(stream)) {
@@ -340,7 +386,12 @@ export class D1Store implements StreamStore {
           { offset, timestamp: Date.now(), data: data.slice(byteOffset) },
         ],
         timedOut: false,
+        closed: stream.closed === 1,
       };
+    }
+
+    if (stream.closed === 1) {
+      return { messages: [], timedOut: false, closed: true };
     }
 
     const effect = Effect.gen(this, function* () {
@@ -399,7 +450,7 @@ export class D1Store implements StreamStore {
     return isJson ? formatJsonResponse(combined) : combined;
   }
 
-  private notifyWaiters(path: string, data: Uint8Array): void {
+  private notifyWaiters(path: string, data: Uint8Array, closed = false): void {
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
 
@@ -416,6 +467,14 @@ export class D1Store implements StreamStore {
             },
           ],
           timedOut: false,
+          closed,
+        });
+      }
+      if (closed) {
+        return Deferred.succeed(waiter.deferred, {
+          messages: [],
+          timedOut: false,
+          closed: true,
         });
       }
       const remaining = this.waiters.get(path) ?? [];

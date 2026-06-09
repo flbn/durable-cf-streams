@@ -20,6 +20,7 @@ export type StreamMetadata = {
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly createdAt: number;
+  readonly closed?: boolean;
 };
 
 export type PutOptions = {
@@ -27,22 +28,27 @@ export type PutOptions = {
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly data?: Uint8Array;
+  readonly closed?: boolean;
 };
 
 export type PutResult = {
   readonly created: boolean;
   readonly nextOffset: Offset;
+  readonly closed?: boolean;
 };
 
 export type AppendOptions = {
   readonly contentType?: string;
   readonly seq?: string;
   readonly producer?: ProducerAppendOptions;
+  readonly close?: boolean;
 };
 
 export type AppendResult = {
   readonly nextOffset: Offset;
   readonly producer?: ProducerAppendResult;
+  readonly closed?: boolean;
+  readonly appended?: boolean;
 };
 
 export type ProducerAppendOptions = {
@@ -69,15 +75,18 @@ export type GetResult = {
   readonly cursor: Cursor;
   readonly etag: ETag;
   readonly contentType: string;
+  readonly closed: boolean;
 };
 
 export type HeadResult = {
   readonly contentType: string;
   readonly nextOffset: Offset;
   readonly etag: ETag;
+  readonly closed: boolean;
 };
 
 export type WaitResult = {
   readonly messages: StreamMessage[];
   readonly timedOut: boolean;
+  readonly closed?: boolean;
 };

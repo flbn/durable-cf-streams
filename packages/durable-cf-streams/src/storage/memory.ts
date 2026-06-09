@@ -1,7 +1,7 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
-import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { initialOffset, offsetToBytePos } from "../offsets.js";
 import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
@@ -25,7 +25,9 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
-  mergeData,
+  appendResult,
+  closedAppendResult,
+  prepareAppendData,
   prepareInitialData,
   validateAppendContentType,
   validateAppendSeq,
@@ -44,6 +46,7 @@ type StoredStream = {
   lastSeq: string | undefined;
   producers: ProducerStateMap;
   appendCount: number;
+  closed: boolean;
   waiters: Waiter[];
 };
 
@@ -72,6 +75,7 @@ export class MemoryStore implements StreamStore {
       return Promise.resolve({
         created: false,
         nextOffset: existing.nextOffset,
+        closed: existing.closed,
       });
     }
 
@@ -90,12 +94,17 @@ export class MemoryStore implements StreamStore {
       lastSeq: undefined,
       producers: {},
       appendCount,
+      closed: options.closed === true,
       waiters: [],
     };
 
     this.streams.set(path, stream);
 
-    return Promise.resolve({ created: true, nextOffset });
+    return Promise.resolve({
+      created: true,
+      nextOffset,
+      closed: stream.closed,
+    });
   }
 
   append(
@@ -108,43 +117,66 @@ export class MemoryStore implements StreamStore {
       throw new StreamNotFoundError(path);
     }
 
-    validateAppendContentType(
-      stream.metadata.contentType,
-      options?.contentType
-    );
     const producerDecision = evaluateProducerAppend(
       stream.producers,
       options?.producer
     );
+    const closedResult = closedAppendResult(
+      path,
+      stream.nextOffset,
+      stream.closed,
+      data,
+      options,
+      producerDecision
+    );
+    if (closedResult) {
+      return Promise.resolve(closedResult);
+    }
+
+    if (data.length > 0) {
+      validateAppendContentType(
+        stream.metadata.contentType,
+        options?.contentType
+      );
+    }
+
     if (producerDecision._tag === "Duplicate") {
       return Promise.resolve({
         nextOffset: stream.nextOffset,
         producer: producerDecision.result,
+        closed: stream.closed,
+        appended: false,
       });
     }
     validateAppendSeq(stream.lastSeq, options?.seq);
 
-    const isJson = isJsonContentType(stream.metadata.contentType);
-    const newData = mergeData(stream.data, data, isJson);
-
-    stream.appendCount++;
-    const nextOffset = formatOffset(stream.appendCount, newData.length);
+    const append = prepareAppendData(
+      stream.data,
+      data,
+      stream.metadata.contentType,
+      stream.appendCount,
+      stream.nextOffset
+    );
     if (options?.seq !== undefined) {
       stream.lastSeq = options.seq;
     }
     stream.producers = commitProducerAppend(stream.producers, producerDecision);
 
-    stream.data = newData;
-    stream.nextOffset = nextOffset;
+    stream.data = append.data;
+    stream.appendCount = append.appendCount;
+    stream.nextOffset = append.nextOffset;
+    stream.closed = options?.close === true;
 
     this.notifyWaiters(stream);
 
-    return Promise.resolve({
-      nextOffset,
-      ...(producerDecision._tag === "Accepted"
-        ? { producer: producerDecision.result }
-        : {}),
-    });
+    return Promise.resolve(
+      appendResult(
+        stream.nextOffset,
+        stream.closed,
+        append.appended,
+        producerDecision
+      )
+    );
   }
 
   get(path: string, options?: GetOptions): Promise<GetResult> {
@@ -174,6 +206,7 @@ export class MemoryStore implements StreamStore {
       cursor: calculateCursor(),
       etag: generateETag(path, startOffset, stream.nextOffset),
       contentType: stream.metadata.contentType,
+      closed: stream.closed,
     });
   }
 
@@ -187,6 +220,7 @@ export class MemoryStore implements StreamStore {
       contentType: stream.metadata.contentType,
       nextOffset: stream.nextOffset,
       etag: generateETag(path, initialOffset(), stream.nextOffset),
+      closed: stream.closed,
     });
   }
 
@@ -223,7 +257,12 @@ export class MemoryStore implements StreamStore {
       return Promise.resolve({
         messages: [{ offset, timestamp: Date.now(), data }],
         timedOut: false,
+        closed: stream.closed,
       });
+    }
+
+    if (stream.closed) {
+      return Promise.resolve({ messages: [], timedOut: false, closed: true });
     }
 
     const effect = Effect.gen(this, function* () {
@@ -290,6 +329,14 @@ export class MemoryStore implements StreamStore {
         return Deferred.succeed(waiter.deferred, {
           messages: [{ offset: waiter.offset, timestamp: Date.now(), data }],
           timedOut: false,
+          closed: stream.closed,
+        });
+      }
+      if (stream.closed) {
+        return Deferred.succeed(waiter.deferred, {
+          messages: [],
+          timedOut: false,
+          closed: true,
         });
       }
       stream.waiters.push(waiter);

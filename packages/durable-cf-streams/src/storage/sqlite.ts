@@ -1,7 +1,7 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
-import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { initialOffset, offsetToBytePos } from "../offsets.js";
 import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
@@ -24,7 +24,9 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
-  mergeData,
+  appendResult,
+  closedAppendResult,
+  prepareAppendData,
   prepareInitialData,
   validateAppendContentType,
   validateAppendSeq,
@@ -42,6 +44,7 @@ type StreamRow = {
   last_seq: string | null;
   producers: string;
   append_count: number;
+  closed: number;
 };
 
 type Waiter = {
@@ -76,7 +79,8 @@ export class SqliteStore implements StreamStore {
       next_offset TEXT NOT NULL,
       last_seq TEXT,
       producers TEXT NOT NULL DEFAULT '{}',
-      append_count INTEGER NOT NULL DEFAULT 0
+      append_count INTEGER NOT NULL DEFAULT 0,
+      closed INTEGER NOT NULL DEFAULT 0
     )
   `;
 
@@ -86,6 +90,14 @@ export class SqliteStore implements StreamStore {
 
   initialize(): void {
     this.sql.exec(SqliteStore.schema);
+    const columns = this.sql.exec("PRAGMA table_info(streams)").toArray() as {
+      name: string;
+    }[];
+    if (!columns.some((column) => column.name === "closed")) {
+      this.sql.exec(
+        "ALTER TABLE streams ADD COLUMN closed INTEGER NOT NULL DEFAULT 0"
+      );
+    }
   }
 
   private getStreamRow(path: string): StreamRow | null {
@@ -117,20 +129,22 @@ export class SqliteStore implements StreamStore {
           contentType: existing.content_type,
           ttlSeconds: existing.ttl_seconds ?? undefined,
           expiresAt: existing.expires_at ?? undefined,
+          closed: existing.closed === 1,
         },
         options
       );
       return Promise.resolve({
         created: false,
         nextOffset: existing.next_offset,
+        closed: existing.closed === 1,
       });
     }
 
     const { data, appendCount, nextOffset } = prepareInitialData(options);
 
     this.sql.exec(
-      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, producers, append_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, producers, append_count, closed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       path,
       options.contentType,
       options.ttlSeconds ?? null,
@@ -139,11 +153,16 @@ export class SqliteStore implements StreamStore {
       data,
       nextOffset,
       "{}",
-      appendCount
+      appendCount,
+      options.closed === true ? 1 : 0
     );
 
     this.streamCache.set(path, { contentType: options.contentType });
-    return Promise.resolve({ created: true, nextOffset });
+    return Promise.resolve({
+      created: true,
+      nextOffset,
+      closed: options.closed,
+    });
   }
 
   append(
@@ -156,45 +175,67 @@ export class SqliteStore implements StreamStore {
       throw new StreamNotFoundError(path);
     }
 
-    validateAppendContentType(stream.content_type, options?.contentType);
     const producers = decodeProducerStateMapJson(stream.producers);
     const producerDecision = evaluateProducerAppend(
       producers,
       options?.producer
     );
+    const closedResult = closedAppendResult(
+      path,
+      stream.next_offset,
+      stream.closed === 1,
+      data,
+      options,
+      producerDecision
+    );
+    if (closedResult) {
+      return Promise.resolve(closedResult);
+    }
+
+    if (data.length > 0) {
+      validateAppendContentType(stream.content_type, options?.contentType);
+    }
+
     if (producerDecision._tag === "Duplicate") {
       return Promise.resolve({
         nextOffset: stream.next_offset,
         producer: producerDecision.result,
+        closed: stream.closed === 1,
+        appended: false,
       });
     }
     validateAppendSeq(stream.last_seq ?? undefined, options?.seq);
 
-    const isJson = isJsonContentType(stream.content_type);
     const existingData = new Uint8Array(stream.data);
-    const newData = mergeData(existingData, data, isJson);
-
-    const newAppendCount = stream.append_count + 1;
-    const nextOffset = formatOffset(newAppendCount, newData.length);
+    const append = prepareAppendData(
+      existingData,
+      data,
+      stream.content_type,
+      stream.append_count,
+      stream.next_offset
+    );
 
     this.sql.exec(
-      "UPDATE streams SET data = ?, next_offset = ?, append_count = ?, last_seq = ?, producers = ? WHERE path = ?",
-      newData,
-      nextOffset,
-      newAppendCount,
+      "UPDATE streams SET data = ?, next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ? WHERE path = ?",
+      append.data,
+      append.nextOffset,
+      append.appendCount,
       options?.seq ?? stream.last_seq,
       JSON.stringify(commitProducerAppend(producers, producerDecision)),
+      options?.close === true ? 1 : 0,
       path
     );
 
-    this.notifyWaiters(path, newData);
+    this.notifyWaiters(path, append.data, options?.close === true);
 
-    return Promise.resolve({
-      nextOffset,
-      ...(producerDecision._tag === "Accepted"
-        ? { producer: producerDecision.result }
-        : {}),
-    });
+    return Promise.resolve(
+      appendResult(
+        append.nextOffset,
+        options?.close === true,
+        append.appended,
+        producerDecision
+      )
+    );
   }
 
   get(path: string, options?: GetOptions): Promise<GetResult> {
@@ -223,6 +264,7 @@ export class SqliteStore implements StreamStore {
       cursor: calculateCursor(),
       etag: generateETag(path, startOffset, stream.next_offset),
       contentType: stream.content_type,
+      closed: stream.closed === 1,
     });
   }
 
@@ -236,6 +278,7 @@ export class SqliteStore implements StreamStore {
       contentType: stream.content_type,
       nextOffset: stream.next_offset,
       etag: generateETag(path, initialOffset(), stream.next_offset),
+      closed: stream.closed === 1,
     });
   }
 
@@ -275,6 +318,15 @@ export class SqliteStore implements StreamStore {
           { offset, timestamp: Date.now(), data: data.slice(byteOffset) },
         ],
         timedOut: false,
+        closed: stream.closed === 1,
+      });
+    }
+
+    if (stream.closed === 1) {
+      return Promise.resolve({
+        messages: [],
+        timedOut: false,
+        closed: true,
       });
     }
 
@@ -335,7 +387,7 @@ export class SqliteStore implements StreamStore {
     return isJson ? formatJsonResponse(combined) : combined;
   }
 
-  private notifyWaiters(path: string, data: Uint8Array): void {
+  private notifyWaiters(path: string, data: Uint8Array, closed = false): void {
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
 
@@ -352,6 +404,15 @@ export class SqliteStore implements StreamStore {
             },
           ],
           timedOut: false,
+          closed,
+        });
+      }
+
+      if (closed) {
+        return Deferred.succeed(waiter.deferred, {
+          messages: [],
+          timedOut: false,
+          closed: true,
         });
       }
 

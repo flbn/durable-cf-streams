@@ -65,6 +65,8 @@ import {
   STREAM_SEQ_HEADER,        // "Stream-Seq"
   STREAM_TTL_HEADER,        // "Stream-TTL"
   STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
+  STREAM_SSE_DATA_ENCODING_HEADER, // "Stream-SSE-Data-Encoding"
+  STREAM_CLOSED_HEADER,     // "Stream-Closed"
   PRODUCER_ID_HEADER,       // "Producer-Id"
   PRODUCER_EPOCH_HEADER,    // "Producer-Epoch"
   PRODUCER_SEQ_HEADER,      // "Producer-Seq"
@@ -139,6 +141,7 @@ import {
   // protocol
   normalizeContentType,
   isJsonContentType,
+  isSSETextCompatibleContentType,
   validateTTL,
   validateExpiresAt,
   generateETag,
@@ -147,6 +150,7 @@ import {
   formatJsonResponse,
   validateJsonCreate,
   encodeSSEData,
+  encodeBase64Data,
 
   // producer idempotency
   parseProducerHeaders,
@@ -171,6 +175,7 @@ import {
   ProducerFencedError,
   ProducerSequenceConflictError,
   SequenceConflictError,
+  StreamClosedError,
   StreamConflictError,
   StreamNotFoundError,
   isStreamError,

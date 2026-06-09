@@ -20,6 +20,19 @@ export class StreamConflictError extends Error {
   }
 }
 
+export class StreamClosedError extends Error {
+  readonly _tag = "StreamClosedError" as const;
+  readonly path: string;
+  readonly nextOffset: string;
+
+  constructor(path: string, nextOffset: string) {
+    super(`Stream closed: ${path}`);
+    this.name = "StreamClosedError";
+    this.path = path;
+    this.nextOffset = nextOffset;
+  }
+}
+
 export class SequenceConflictError extends Error {
   readonly _tag = "SequenceConflictError" as const;
   readonly expected: string;
@@ -120,6 +133,7 @@ export class PayloadTooLargeError extends Error {
 
 export type StreamError =
   | StreamNotFoundError
+  | StreamClosedError
   | StreamConflictError
   | SequenceConflictError
   | ContentTypeMismatchError
@@ -132,6 +146,7 @@ export type StreamError =
 
 const streamErrorTags = new Set<StreamError["_tag"]>([
   "StreamNotFoundError",
+  "StreamClosedError",
   "StreamConflictError",
   "SequenceConflictError",
   "ContentTypeMismatchError",
@@ -153,6 +168,7 @@ export const isStreamError = (error: unknown): error is StreamError =>
 export const streamErrorStatus = Match.type<StreamError>().pipe(
   Match.tag("StreamNotFoundError", () => 404),
   Match.tag(
+    "StreamClosedError",
     "StreamConflictError",
     "SequenceConflictError",
     "ContentTypeMismatchError",

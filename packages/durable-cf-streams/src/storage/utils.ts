@@ -1,21 +1,29 @@
 import {
   ContentTypeMismatchError,
   SequenceConflictError,
+  StreamClosedError,
   StreamConflictError,
 } from "../errors.js";
 import { formatOffset } from "../offsets.js";
+import type { ProducerAppendDecision } from "../producer.js";
 import {
   isJsonContentType,
   normalizeContentType,
   processJsonAppend,
   validateJsonCreate,
 } from "../protocol.js";
-import type { Offset, PutOptions } from "../types.js";
+import type {
+  AppendOptions,
+  AppendResult,
+  Offset,
+  PutOptions,
+} from "../types.js";
 
 export type IdempotentCreateInfo = {
   readonly contentType: string;
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
+  readonly closed?: boolean;
 };
 
 export const validateIdempotentCreate = (
@@ -35,6 +43,10 @@ export const validateIdempotentCreate = (
 
   if (options.expiresAt !== existing.expiresAt) {
     throw new StreamConflictError("Expires-At mismatch on idempotent create");
+  }
+
+  if ((options.closed ?? false) !== (existing.closed ?? false)) {
+    throw new StreamConflictError("closed state mismatch on idempotent create");
   }
 };
 
@@ -101,3 +113,70 @@ export const mergeData = (
   merged.set(newData, existingData.length);
   return merged;
 };
+
+export const closedAppendResult = (
+  path: string,
+  nextOffset: Offset,
+  closed: boolean,
+  data: Uint8Array,
+  options: AppendOptions | undefined,
+  decision: ProducerAppendDecision
+): AppendResult | undefined => {
+  if (!closed) {
+    return;
+  }
+
+  if (decision._tag === "Duplicate") {
+    return {
+      nextOffset,
+      producer: decision.result,
+      closed: true,
+      appended: false,
+    };
+  }
+
+  if (options?.close === true && data.length === 0 && !options.producer) {
+    return { nextOffset, closed: true, appended: false };
+  }
+
+  throw new StreamClosedError(path, nextOffset);
+};
+
+export type PreparedAppend = {
+  readonly data: Uint8Array;
+  readonly appendCount: number;
+  readonly nextOffset: Offset;
+  readonly appended: boolean;
+};
+
+export const prepareAppendData = (
+  existingData: Uint8Array,
+  data: Uint8Array,
+  contentType: string,
+  appendCount: number,
+  nextOffset: Offset
+): PreparedAppend => {
+  if (data.length === 0) {
+    return { data: existingData, appendCount, nextOffset, appended: false };
+  }
+
+  const merged = mergeData(existingData, data, isJsonContentType(contentType));
+  return {
+    data: merged,
+    appendCount: appendCount + 1,
+    nextOffset: formatOffset(appendCount + 1, merged.length),
+    appended: true,
+  };
+};
+
+export const appendResult = (
+  nextOffset: Offset,
+  closed: boolean,
+  appended: boolean,
+  decision: ProducerAppendDecision
+): AppendResult => ({
+  nextOffset,
+  closed,
+  appended,
+  ...(decision._tag === "Accepted" ? { producer: decision.result } : {}),
+});

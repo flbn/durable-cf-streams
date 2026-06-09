@@ -2,6 +2,7 @@ import type { Offset, StreamStore } from "durable-cf-streams";
 import {
   CACHE_CONTROL_HEADER,
   calculateCursor,
+  encodeBase64Data,
   encodeSSEData,
   generateResponseCursor,
   HEAD_CACHE_CONTROL_VALUE,
@@ -10,19 +11,22 @@ import {
   STREAM_CURSOR_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
+  STREAM_SSE_DATA_ENCODING_HEADER,
   STREAM_UP_TO_DATE_HEADER,
 } from "durable-cf-streams";
 import { KVStore } from "durable-cf-streams/storage/kv";
 import {
   appendResponse,
   createAsyncQueue,
+  isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
   mapError,
-  parseLiveMode,
-  parseOffsetParam,
   parseProducerOptions,
   parseTtlAndExpires,
-  resolveReadOffset,
+  pumpSSEStream,
+  resolveReadRequest,
+  type SSEDataEncoding,
+  streamClosedHeaders,
   tailOffsetCacheHeaders,
   withProtocolHeaders,
 } from "../../utils.js";
@@ -93,12 +97,14 @@ export class StreamDO implements DurableObject {
       ttlSeconds,
       expiresAt,
       data: data.length > 0 ? data : undefined,
+      closed: isStreamClosedRequest(request),
     });
 
     const status = result.created ? 201 : 200;
     const headers: Record<string, string> = {
       [STREAM_OFFSET_HEADER]: result.nextOffset,
       "Content-Type": normalizeContentType(contentType),
+      ...streamClosedHeaders(result.closed),
     };
     if (result.created) {
       headers.Location = request.url.split("?")[0];
@@ -108,14 +114,15 @@ export class StreamDO implements DurableObject {
 
   private async handlePost(path: string, request: Request): Promise<Response> {
     const contentType = request.headers.get("content-type");
-    if (!contentType) {
+    const body = await request.arrayBuffer();
+    const data = new Uint8Array(body);
+    const close = isStreamClosedRequest(request);
+
+    if (data.length > 0 && !contentType) {
       return new Response("Content-Type header required", { status: 400 });
     }
 
-    const body = await request.arrayBuffer();
-    const data = new Uint8Array(body);
-
-    if (data.length === 0) {
+    if (data.length === 0 && !close) {
       return new Response("Empty body not allowed", { status: 400 });
     }
 
@@ -124,7 +131,11 @@ export class StreamDO implements DurableObject {
 
     const result = await this.appendQueue(() =>
       this.store.append(path, data, {
-        contentType: normalizeContentType(contentType),
+        contentType:
+          data.length > 0 && contentType
+            ? normalizeContentType(contentType)
+            : undefined,
+        close,
         producer,
         seq,
       })
@@ -141,27 +152,24 @@ export class StreamDO implements DurableObject {
     const cursorParam = url.searchParams.get("cursor");
     const ifNoneMatch = request.headers.get("if-none-match");
 
-    const offsetResult = parseOffsetParam(url.searchParams.get("offset"));
-    if (!offsetResult.ok) {
-      return offsetResult.error;
-    }
-    const resolvedOffset = await resolveReadOffset(
+    const readRequest = await resolveReadRequest(
       this.store,
       path,
-      offsetResult
+      url,
+      request
     );
-    if (!resolvedOffset.ok) {
-      return resolvedOffset.error;
+    if (!readRequest.ok) {
+      return readRequest.error;
     }
-    const { offset, isTail } = resolvedOffset;
-
-    const liveMode = parseLiveMode(url, request, offset);
-    if (liveMode.mode === "error") {
-      return liveMode.error;
-    }
+    const { offset, isTail, liveMode } = readRequest;
 
     if (liveMode.mode === "sse" && offset !== undefined) {
-      return this.handleSSE(path, offset, cursorParam ?? undefined);
+      return this.handleSSE(
+        path,
+        offset,
+        cursorParam ?? undefined,
+        liveMode.encoding
+      );
     }
     if (liveMode.mode === "long-poll" && offset !== undefined) {
       return await this.handleLongPoll(
@@ -191,6 +199,7 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: result.nextOffset,
           [STREAM_CURSOR_HEADER]: result.cursor,
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(result.closed),
           ...tailOffsetCacheHeaders(isTailOffset),
         },
       });
@@ -206,6 +215,7 @@ export class StreamDO implements DurableObject {
         [STREAM_OFFSET_HEADER]: result.nextOffset,
         [STREAM_CURSOR_HEADER]: result.cursor,
         [STREAM_UP_TO_DATE_HEADER]: result.upToDate ? "true" : "false",
+        ...streamClosedHeaders(result.closed),
         ...tailOffsetCacheHeaders(isTailOffset),
       },
     });
@@ -214,13 +224,14 @@ export class StreamDO implements DurableObject {
   private handleSSE(
     path: string,
     offset: Offset,
-    clientCursor?: string
+    clientCursor?: string,
+    encoding?: SSEDataEncoding
   ): Response {
     const state = { currentOffset: offset, cancelled: false };
 
     const stream = new ReadableStream({
       start: (controller) => {
-        this.runSSELoop(path, state, clientCursor, controller);
+        this.runSSELoop(path, state, clientCursor, encoding, controller);
       },
       cancel: () => {
         state.cancelled = true;
@@ -234,6 +245,9 @@ export class StreamDO implements DurableObject {
         [CACHE_CONTROL_HEADER]: SSE_CACHE_CONTROL_VALUE,
         Connection: "keep-alive",
         [STREAM_CURSOR_HEADER]: calculateCursor(),
+        ...(encoding === "base64"
+          ? { [STREAM_SSE_DATA_ENCODING_HEADER]: encoding }
+          : {}),
       },
     });
   }
@@ -242,6 +256,7 @@ export class StreamDO implements DurableObject {
     path: string,
     state: { currentOffset: Offset; cancelled: boolean },
     clientCursor: string | undefined,
+    encoding: SSEDataEncoding | undefined,
     controller: ReadableStreamDefaultController<Uint8Array>
   ): Promise<void> {
     const encoder = new TextEncoder();
@@ -252,20 +267,33 @@ export class StreamDO implements DurableObject {
       );
     };
 
-    const sendControl = (nextOffset: Offset) => {
+    const sendControl = (nextOffset: Offset, closed = false) => {
       const cursor = generateResponseCursor(clientCursor);
       send(
         "control",
-        JSON.stringify({
-          streamCursor: cursor,
-          streamNextOffset: nextOffset,
-          upToDate: true,
-        })
+        JSON.stringify(
+          closed
+            ? {
+                streamNextOffset: nextOffset,
+                upToDate: true,
+                streamClosed: true,
+              }
+            : {
+                streamCursor: cursor,
+                streamNextOffset: nextOffset,
+                upToDate: true,
+              }
+        )
       );
     };
 
-    const sendData = (data: string, _contentType: string) => {
-      send("data", data);
+    const sendData = (data: Uint8Array, _contentType: string) => {
+      send(
+        "data",
+        encoding === "base64"
+          ? encodeBase64Data(data)
+          : new TextDecoder().decode(data)
+      );
     };
 
     const heartbeat = setInterval(() => {
@@ -291,47 +319,17 @@ export class StreamDO implements DurableObject {
   private async processSSEStream(
     path: string,
     state: { currentOffset: Offset; cancelled: boolean },
-    sendControl: (offset: Offset) => void,
-    sendData: (data: string, contentType: string) => void
+    sendControl: (offset: Offset, closed?: boolean) => void,
+    sendData: (data: Uint8Array, contentType: string) => void
   ): Promise<void> {
-    if (!this.store.has(path)) {
-      throw new Error("Stream not found");
-    }
-
-    const initial = await this.store.get(path, { offset: state.currentOffset });
-    if (initial.messages.length > 0) {
-      const body = this.store.formatResponse(path, initial.messages);
-      sendData(new TextDecoder().decode(body), initial.contentType);
-      state.currentOffset = initial.nextOffset;
-    }
-    sendControl(state.currentOffset);
-
-    while (!state.cancelled) {
-      if (!this.store.has(path)) {
-        throw new Error("Stream not found");
-      }
-
-      const wait = await this.store.waitForData(
-        path,
-        state.currentOffset,
-        LIVE_WAIT_TIMEOUT_MS
-      );
-
-      if (wait.timedOut) {
-        sendControl(state.currentOffset);
-        continue;
-      }
-
-      if (wait.messages.length > 0) {
-        const result = await this.store.get(path, {
-          offset: state.currentOffset,
-        });
-        const body = this.store.formatResponse(path, result.messages);
-        sendData(new TextDecoder().decode(body), result.contentType);
-        state.currentOffset = result.nextOffset;
-        sendControl(state.currentOffset);
-      }
-    }
+    await pumpSSEStream(
+      this.store,
+      path,
+      state,
+      LIVE_WAIT_TIMEOUT_MS,
+      sendControl,
+      sendData
+    );
   }
 
   private async handleLongPoll(
@@ -352,6 +350,7 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: initial.nextOffset,
           [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(initial.closed),
         },
       });
     }
@@ -364,6 +363,20 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: initial.nextOffset,
           [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(initial.closed),
+        },
+      });
+    }
+
+    if (initial.closed) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ETag: initial.etag,
+          [STREAM_OFFSET_HEADER]: initial.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(initial.closed),
         },
       });
     }
@@ -386,6 +399,7 @@ export class StreamDO implements DurableObject {
             [STREAM_OFFSET_HEADER]: current.nextOffset,
             [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
             [STREAM_UP_TO_DATE_HEADER]: "true",
+            ...streamClosedHeaders(current.closed),
           },
         });
       }
@@ -397,11 +411,24 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: current.nextOffset,
           [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(current.closed),
         },
       });
     }
 
     const result = await this.store.get(path, { offset });
+    if (result.messages.length === 0) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ETag: result.etag,
+          [STREAM_OFFSET_HEADER]: result.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(result.closed),
+        },
+      });
+    }
     const body = this.store.formatResponse(path, result.messages);
 
     return new Response(body, {
@@ -412,6 +439,7 @@ export class StreamDO implements DurableObject {
         [STREAM_OFFSET_HEADER]: result.nextOffset,
         [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
         [STREAM_UP_TO_DATE_HEADER]: "true",
+        ...streamClosedHeaders(result.closed),
       },
     });
   }
@@ -430,6 +458,7 @@ export class StreamDO implements DurableObject {
         [CACHE_CONTROL_HEADER]: HEAD_CACHE_CONTROL_VALUE,
         ETag: result.etag,
         [STREAM_OFFSET_HEADER]: result.nextOffset,
+        ...streamClosedHeaders(result.closed),
       },
     });
   }
