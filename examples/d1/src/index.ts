@@ -1,7 +1,11 @@
 import {
+  CACHE_CONTROL_HEADER,
   calculateCursor,
+  encodeSSEData,
   generateResponseCursor,
+  HEAD_CACHE_CONTROL_VALUE,
   normalizeContentType,
+  SSE_CACHE_CONTROL_VALUE,
   STREAM_CURSOR_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
@@ -9,10 +13,12 @@ import {
 } from "durable-cf-streams";
 import { D1Store } from "durable-cf-streams/storage/d1";
 import {
+  createAsyncQueue,
   mapError,
   parseLiveMode,
   parseOffsetParam,
   parseTtlAndExpires,
+  withProtocolHeaders,
 } from "../../utils.js";
 
 type Env = {
@@ -31,6 +37,7 @@ export default {
 
 export class StreamDO implements DurableObject {
   private readonly store: D1Store;
+  private readonly appendQueue = createAsyncQueue();
   private initialized = false;
 
   constructor(_state: DurableObjectState, env: Env) {
@@ -53,20 +60,22 @@ export class StreamDO implements DurableObject {
     try {
       switch (request.method) {
         case "PUT":
-          return await this.handlePut(path, request);
+          return withProtocolHeaders(await this.handlePut(path, request));
         case "POST":
-          return await this.handlePost(path, request);
+          return withProtocolHeaders(await this.handlePost(path, request));
         case "GET":
-          return await this.handleGet(path, url, request);
+          return withProtocolHeaders(await this.handleGet(path, url, request));
         case "HEAD":
-          return await this.handleHead(path);
+          return withProtocolHeaders(await this.handleHead(path));
         case "DELETE":
-          return await this.handleDelete(path);
+          return withProtocolHeaders(await this.handleDelete(path));
         default:
-          return new Response("Method Not Allowed", { status: 405 });
+          return withProtocolHeaders(
+            new Response("Method Not Allowed", { status: 405 })
+          );
       }
     } catch (error) {
-      return mapError(error);
+      return withProtocolHeaders(mapError(error));
     }
   }
 
@@ -122,13 +131,15 @@ export class StreamDO implements DurableObject {
       request.headers.get("x-seq") ??
       undefined;
 
-    const result = await this.store.append(path, data, {
-      contentType: normalizeContentType(contentType),
-      seq,
-    });
+    const result = await this.appendQueue(() =>
+      this.store.append(path, data, {
+        contentType: normalizeContentType(contentType),
+        seq,
+      })
+    );
 
     return new Response(null, {
-      status: 200,
+      status: 204,
       headers: {
         [STREAM_OFFSET_HEADER]: result.nextOffset,
       },
@@ -222,7 +233,7 @@ export class StreamDO implements DurableObject {
       status: 200,
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        [CACHE_CONTROL_HEADER]: SSE_CACHE_CONTROL_VALUE,
         Connection: "keep-alive",
         [STREAM_CURSOR_HEADER]: calculateCursor(),
       },
@@ -238,7 +249,9 @@ export class StreamDO implements DurableObject {
     const encoder = new TextEncoder();
 
     const send = (event: string, data: string) => {
-      controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+      controller.enqueue(
+        encoder.encode(`event: ${event}\n${encodeSSEData(data)}\n\n`)
+      );
     };
 
     const sendControl = (nextOffset: string) => {
@@ -253,16 +266,8 @@ export class StreamDO implements DurableObject {
       );
     };
 
-    const sendData = (data: string, contentType: string) => {
-      if (contentType.includes("json")) {
-        send("data", data);
-      } else {
-        const lines = data
-          .split("\n")
-          .map((line) => `data: ${line}`)
-          .join("\n");
-        controller.enqueue(encoder.encode(`event: data\n${lines}\n\n`));
-      }
+    const sendData = (data: string, _contentType: string) => {
+      send("data", data);
     };
 
     const heartbeat = setInterval(() => {
@@ -412,6 +417,7 @@ export class StreamDO implements DurableObject {
       status: 200,
       headers: {
         "Content-Type": result.contentType,
+        [CACHE_CONTROL_HEADER]: HEAD_CACHE_CONTROL_VALUE,
         ETag: result.etag,
         [STREAM_OFFSET_HEADER]: result.nextOffset,
       },

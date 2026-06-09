@@ -1,8 +1,12 @@
 import type { StreamStore } from "durable-cf-streams";
 import {
+  CACHE_CONTROL_HEADER,
   calculateCursor,
+  encodeSSEData,
   generateResponseCursor,
+  HEAD_CACHE_CONTROL_VALUE,
   normalizeContentType,
+  SSE_CACHE_CONTROL_VALUE,
   STREAM_CURSOR_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
@@ -11,10 +15,12 @@ import {
 import { MemoryStore } from "durable-cf-streams/storage/memory";
 import { Hono } from "hono";
 import {
+  createAsyncQueue,
   mapError,
   parseLiveMode,
   parseOffsetParam,
   parseTtlAndExpires,
+  withProtocolHeaders,
 } from "../../utils.js";
 
 type Env = {
@@ -23,17 +29,30 @@ type Env = {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.all("/*", (c) => {
-  const id = c.env.STREAMS.idFromName("global");
-  const stub = c.env.STREAMS.get(id);
+function getStreamStub(env: Env): DurableObjectStub {
+  const id = env.STREAMS.idFromName("global");
+  return env.STREAMS.get(id);
+}
 
-  return stub.fetch(c.req.raw);
-});
+app.all("/*", (c) => getStreamStub(c.env).fetch(c.req.raw));
 
-export default app;
+export default {
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> {
+    if (request.method === "HEAD") {
+      return getStreamStub(env).fetch(request);
+    }
+
+    return await app.fetch(request, env, ctx);
+  },
+};
 
 export class StreamDO implements DurableObject {
   private readonly store: StreamStore;
+  private readonly appendQueue = createAsyncQueue();
   private readonly app: Hono;
 
   constructor(_state: DurableObjectState, _env: Env) {
@@ -72,15 +91,6 @@ export class StreamDO implements DurableObject {
       }
     });
 
-    app.on("HEAD", "*", async (c) => {
-      const path = new URL(c.req.url).pathname;
-      try {
-        return await this.handleHead(path);
-      } catch (error) {
-        return mapError(error);
-      }
-    });
-
     app.delete("*", async (c) => {
       const path = new URL(c.req.url).pathname;
       try {
@@ -96,7 +106,17 @@ export class StreamDO implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
-    return await this.app.fetch(request);
+    try {
+      if (request.method === "HEAD") {
+        return withProtocolHeaders(
+          await this.handleHead(new URL(request.url).pathname)
+        );
+      }
+
+      return withProtocolHeaders(await this.app.fetch(request));
+    } catch (error) {
+      return withProtocolHeaders(mapError(error));
+    }
   }
 
   private async handlePut(path: string, request: Request): Promise<Response> {
@@ -152,13 +172,15 @@ export class StreamDO implements DurableObject {
       request.headers.get("x-seq") ??
       undefined;
 
-    const result = await this.store.append(path, data, {
-      contentType: normalizeContentType(contentType),
-      seq,
-    });
+    const result = await this.appendQueue(() =>
+      this.store.append(path, data, {
+        contentType: normalizeContentType(contentType),
+        seq,
+      })
+    );
 
     return new Response(null, {
-      status: 200,
+      status: 204,
       headers: {
         [STREAM_OFFSET_HEADER]: result.nextOffset,
       },
@@ -252,7 +274,7 @@ export class StreamDO implements DurableObject {
       status: 200,
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        [CACHE_CONTROL_HEADER]: SSE_CACHE_CONTROL_VALUE,
         Connection: "keep-alive",
         [STREAM_CURSOR_HEADER]: calculateCursor(),
       },
@@ -268,7 +290,9 @@ export class StreamDO implements DurableObject {
     const encoder = new TextEncoder();
 
     const send = (event: string, data: string) => {
-      controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+      controller.enqueue(
+        encoder.encode(`event: ${event}\n${encodeSSEData(data)}\n\n`)
+      );
     };
 
     const sendControl = (nextOffset: string) => {
@@ -283,16 +307,8 @@ export class StreamDO implements DurableObject {
       );
     };
 
-    const sendData = (data: string, contentType: string) => {
-      if (contentType.includes("json")) {
-        send("data", data);
-      } else {
-        const lines = data
-          .split("\n")
-          .map((line) => `data: ${line}`)
-          .join("\n");
-        controller.enqueue(encoder.encode(`event: data\n${lines}\n\n`));
-      }
+    const sendData = (data: string, _contentType: string) => {
+      send("data", data);
     };
 
     const heartbeat = setInterval(() => {
@@ -442,6 +458,7 @@ export class StreamDO implements DurableObject {
       status: 200,
       headers: {
         "Content-Type": result.contentType,
+        [CACHE_CONTROL_HEADER]: HEAD_CACHE_CONTROL_VALUE,
         ETag: result.etag,
         [STREAM_OFFSET_HEADER]: result.nextOffset,
       },

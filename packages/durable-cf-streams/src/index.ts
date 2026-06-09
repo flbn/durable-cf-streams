@@ -1,8 +1,14 @@
 // biome-ignore lint: performance/noBarrelFile: bleh, its a library
 export {
+  CACHE_CONTROL_HEADER,
+  CONTENT_TYPE_OPTIONS_HEADER,
+  CROSS_ORIGIN_RESOURCE_POLICY_HEADER,
   CURSOR_QUERY_PARAM,
+  HEAD_CACHE_CONTROL_VALUE,
   LIVE_QUERY_PARAM,
   OFFSET_QUERY_PARAM,
+  PROTOCOL_SECURITY_HEADERS,
+  SSE_CACHE_CONTROL_VALUE,
   SSE_COMPATIBLE_CONTENT_TYPES,
   STREAM_CURSOR_HEADER,
   STREAM_EXPIRES_AT_HEADER,
@@ -43,6 +49,7 @@ export {
 export { decodeStreamPath, encodeStreamPath } from "./path.js";
 export {
   type ExpirationInfo,
+  encodeSSEData,
   formatJsonResponse,
   generateETag,
   isExpired,

@@ -34,6 +34,7 @@ const TTL_REGEX = /^[1-9][0-9]*$/;
 const EXPIRES_AT_REGEX =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const ETAG_REGEX = /^"([^:]+):([^:]+):([^"]+)"$/;
+const SSE_LINE_ENDING = /\r\n|\r|\n/;
 
 export const normalizeContentType = (contentType: string): string => {
   const semicolonIndex = contentType.indexOf(";");
@@ -47,6 +48,12 @@ export const isJsonContentType = (contentType: string): boolean => {
   const normalized = normalizeContentType(contentType);
   return normalized === "application/json" || normalized.endsWith("+json");
 };
+
+export const encodeSSEData = (data: string): string =>
+  data
+    .split(SSE_LINE_ENDING)
+    .map((line) => `data: ${line}`)
+    .join("\n");
 
 export const validateTTL = (ttl: string): number | null => {
   if (!TTL_REGEX.test(ttl)) {

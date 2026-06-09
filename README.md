@@ -62,6 +62,16 @@ pnpm run test
 
 note: protocol constants and utilities are implemented locally for cloudflare workers compatibility (no node.js dependencies).
 
+## conformance migration boundary
+
+<!-- migration boundary for durable-streams conformance bumps, package exports, and examples/utils.ts -->
+
+when a conformance bump needs new behavior, keep the line clear:
+
+- put protocol primitives in `durable-cf-streams`: constants, validators, serializers, parsers, offset/cursor helpers, error types, and storage semantics that are framework-neutral and useful to consumers.
+- keep http wiring in examples: routing, request parsing, mapping errors to `Response`, framework adapters, and small runtime coordination helpers needed by a particular storage backend or example.
+- if the same protocol detail appears in multiple examples and is easy to get subtly wrong, promote the pure part into the package before adding more example glue.
+
 ## releasing
 
 release-please automatically creates a release PR when you merge to main. by default it bumps patch version based on conventional commits.

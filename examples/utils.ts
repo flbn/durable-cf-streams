@@ -1,11 +1,37 @@
 import {
   isValidOffset,
   normalizeOffset,
+  PROTOCOL_SECURITY_HEADERS,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_TTL_HEADER,
   validateExpiresAt,
   validateTTL,
 } from "durable-cf-streams";
+
+export type AsyncQueue = <T>(operation: () => Promise<T>) => Promise<T>;
+
+export function createAsyncQueue(): AsyncQueue {
+  let tail: Promise<unknown> = Promise.resolve();
+
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const next = tail.then(operation, operation);
+    tail = next.catch(() => undefined);
+    return next;
+  };
+}
+
+export function withProtocolHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(PROTOCOL_SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
+
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
 
 export type TtlExpiresResult =
   | { ok: true; ttlSeconds?: number; expiresAt?: string }

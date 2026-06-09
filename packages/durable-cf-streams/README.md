@@ -52,6 +52,8 @@ interface StreamStore {
 
 ## protocol constants
 
+<!-- exported protocol constants from packages/durable-cf-streams/src/const.ts via packages/durable-cf-streams/src/index.ts -->
+
 compatible with the [durable streams protocol](https://github.com/durable-streams/durable-streams):
 
 ```typescript
@@ -63,6 +65,14 @@ import {
   STREAM_SEQ_HEADER,        // "Stream-Seq"
   STREAM_TTL_HEADER,        // "Stream-TTL"
   STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
+  CACHE_CONTROL_HEADER,     // "Cache-Control"
+  CONTENT_TYPE_OPTIONS_HEADER,        // "X-Content-Type-Options"
+  CROSS_ORIGIN_RESOURCE_POLICY_HEADER, // "Cross-Origin-Resource-Policy"
+
+  // response header values
+  PROTOCOL_SECURITY_HEADERS,
+  HEAD_CACHE_CONTROL_VALUE, // "no-store"
+  SSE_CACHE_CONTROL_VALUE,  // "no-cache"
 
   // query param constants
   OFFSET_QUERY_PARAM,       // "offset"
@@ -85,6 +95,8 @@ import {
 ```
 
 ## utilities
+
+<!-- exported utility functions from packages/durable-cf-streams/src/index.ts -->
 
 ```typescript
 import {
@@ -109,6 +121,7 @@ import {
   processJsonAppend,
   formatJsonResponse,
   validateJsonCreate,
+  encodeSSEData,
 } from "durable-cf-streams";
 ```
 
