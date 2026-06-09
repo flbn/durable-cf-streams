@@ -8,6 +8,11 @@ frozenLockfile: true
 overrides:
   "@durable-streams/client": 0.1.0
 
+allowBuilds:
+  "esbuild@0.27.2 || 0.27.3": true
+  "sharp@0.34.5": true
+  "workerd@1.20260601.1": true
+
 catalog:
   "@durable-streams/server-conformance-tests": 0.1.4
   vitest: 4.1.8
