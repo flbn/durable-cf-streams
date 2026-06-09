@@ -14,12 +14,12 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.17.1",
+  "packageManager": "pnpm@11.5.2",
   "engines": {
     "node": ">=22"
   },
   "volta": {
-    "node": "22.16.0"
+    "node": "24.16.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
@@ -28,10 +28,5 @@
   },
   "dependencies": {
     "durable-cf-streams": "workspace:*"
-  },
-  "pnpm": {
-    "overrides": {
-      "@durable-streams/client": "0.1.0"
-    }
   }
 }
