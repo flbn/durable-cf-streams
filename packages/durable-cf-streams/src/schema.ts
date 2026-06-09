@@ -38,11 +38,16 @@ export const PersistedStreamMetadataSchema = Schema.Struct({
   ttlSeconds: Schema.optional(Schema.Number),
   expiresAt: Schema.optional(Schema.String),
   createdAt: Schema.Number,
+  lastAccessedAt: Schema.optional(Schema.Number),
   nextOffset: OffsetSchema,
   lastSeq: Schema.optional(Schema.String),
   appendCount: Schema.Number,
   producers: ProducerStateMapSchema,
   closed: Schema.optional(Schema.Boolean),
+  forkedFrom: Schema.optional(Schema.String),
+  forkOffset: Schema.optional(OffsetSchema),
+  childCount: Schema.optional(Schema.Number),
+  deleted: Schema.optional(Schema.Boolean),
 });
 
 export type PersistedStreamMetadata = Schema.Schema.Type<

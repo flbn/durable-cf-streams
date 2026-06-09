@@ -16,6 +16,8 @@ import {
   parseProducerHeaders,
   STREAM_CLOSED_HEADER,
   STREAM_EXPIRES_AT_HEADER,
+  STREAM_FORK_OFFSET_HEADER,
+  STREAM_FORKED_FROM_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_TTL_HEADER,
   streamErrorStatus,
@@ -96,6 +98,43 @@ export function parseTtlAndExpires(request: Request): TtlExpiresResult {
   }
 
   return { ok: true, ttlSeconds, expiresAt };
+}
+
+export type ForkOptionsResult =
+  | { ok: true; forkedFrom?: string; forkOffset?: Offset }
+  | { ok: false; error: Response };
+
+export function parseForkOptions(request: Request): ForkOptionsResult {
+  const forkedFrom = request.headers.get(STREAM_FORKED_FROM_HEADER);
+  const forkOffsetHeader = request.headers.get(STREAM_FORK_OFFSET_HEADER);
+
+  if (!(forkedFrom || forkOffsetHeader)) {
+    return { ok: true };
+  }
+
+  if (!forkedFrom) {
+    return {
+      ok: false,
+      error: new Response("Fork source required", { status: 400 }),
+    };
+  }
+
+  if (!forkOffsetHeader) {
+    return { ok: true, forkedFrom };
+  }
+
+  if (!isValidOffset(forkOffsetHeader)) {
+    return {
+      ok: false,
+      error: new Response("Invalid fork offset format", { status: 400 }),
+    };
+  }
+
+  return {
+    ok: true,
+    forkedFrom,
+    forkOffset: normalizeOffset(forkOffsetHeader),
+  };
 }
 
 export type LiveModeResult =
@@ -346,6 +385,22 @@ export function isStreamClosedRequest(request: Request): boolean {
 
 export function streamClosedHeaders(closed: boolean | undefined): HeadersInit {
   return closed === true ? { [STREAM_CLOSED_HEADER]: "true" } : {};
+}
+
+export function streamMetadataHeaders(result: {
+  readonly closed?: boolean;
+  readonly ttlSeconds?: number;
+  readonly expiresAt?: string;
+}): HeadersInit {
+  return {
+    ...streamClosedHeaders(result.closed),
+    ...(result.ttlSeconds === undefined
+      ? {}
+      : { [STREAM_TTL_HEADER]: String(result.ttlSeconds) }),
+    ...(result.expiresAt === undefined
+      ? {}
+      : { [STREAM_EXPIRES_AT_HEADER]: result.expiresAt }),
+  };
 }
 
 export function appendResponse(result: AppendResult): Response {

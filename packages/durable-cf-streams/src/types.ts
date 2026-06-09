@@ -20,7 +20,12 @@ export type StreamMetadata = {
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly createdAt: number;
+  readonly lastAccessedAt?: number;
   readonly closed?: boolean;
+  readonly forkedFrom?: string;
+  readonly forkOffset?: Offset;
+  readonly childCount?: number;
+  readonly deleted?: boolean;
 };
 
 export type PutOptions = {
@@ -29,6 +34,8 @@ export type PutOptions = {
   readonly expiresAt?: string;
   readonly data?: Uint8Array;
   readonly closed?: boolean;
+  readonly forkedFrom?: string;
+  readonly forkOffset?: Offset;
 };
 
 export type PutResult = {
@@ -83,6 +90,8 @@ export type HeadResult = {
   readonly nextOffset: Offset;
   readonly etag: ETag;
   readonly closed: boolean;
+  readonly ttlSeconds?: number;
+  readonly expiresAt?: string;
 };
 
 export type WaitResult = {

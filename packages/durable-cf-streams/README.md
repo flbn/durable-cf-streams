@@ -67,6 +67,8 @@ import {
   STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
   STREAM_SSE_DATA_ENCODING_HEADER, // "Stream-SSE-Data-Encoding"
   STREAM_CLOSED_HEADER,     // "Stream-Closed"
+  STREAM_FORKED_FROM_HEADER, // "Stream-Forked-From"
+  STREAM_FORK_OFFSET_HEADER, // "Stream-Fork-Offset"
   PRODUCER_ID_HEADER,       // "Producer-Id"
   PRODUCER_EPOCH_HEADER,    // "Producer-Epoch"
   PRODUCER_SEQ_HEADER,      // "Producer-Seq"
@@ -177,6 +179,7 @@ import {
   SequenceConflictError,
   StreamClosedError,
   StreamConflictError,
+  StreamGoneError,
   StreamNotFoundError,
   isStreamError,
   streamErrorStatus,

@@ -6,6 +6,7 @@ export type ExpirationInfo = {
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly createdAt?: number;
+  readonly lastAccessedAt?: number;
 };
 
 export const isExpired = (info: ExpirationInfo): boolean => {
@@ -18,8 +19,9 @@ export const isExpired = (info: ExpirationInfo): boolean => {
     }
   }
 
-  if (info.ttlSeconds !== undefined && info.createdAt !== undefined) {
-    const expiresAtMs = info.createdAt + info.ttlSeconds * 1000;
+  const ttlBase = info.lastAccessedAt ?? info.createdAt;
+  if (info.ttlSeconds !== undefined && ttlBase !== undefined) {
+    const expiresAtMs = ttlBase + info.ttlSeconds * 1000;
     if (now >= expiresAtMs) {
       return true;
     }

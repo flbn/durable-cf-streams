@@ -22,12 +22,14 @@ import {
   isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
   mapError,
+  parseForkOptions,
   parseProducerOptions,
   parseTtlAndExpires,
   pumpSSEStream,
   resolveReadRequest,
   type SSEDataEncoding,
   streamClosedHeaders,
+  streamMetadataHeaders,
   tailOffsetCacheHeaders,
   withProtocolHeaders,
 } from "../../utils.js";
@@ -114,6 +116,10 @@ export class StreamDO implements DurableObject {
       return ttlResult.error;
     }
     const { ttlSeconds, expiresAt } = ttlResult;
+    const forkResult = parseForkOptions(request);
+    if (!forkResult.ok) {
+      return forkResult.error;
+    }
 
     const body = await request.arrayBuffer();
     const data = new Uint8Array(body);
@@ -124,6 +130,8 @@ export class StreamDO implements DurableObject {
       expiresAt,
       data: data.length > 0 ? data : undefined,
       closed: isStreamClosedRequest(request),
+      forkedFrom: forkResult.forkedFrom,
+      forkOffset: forkResult.forkOffset,
     });
 
     const status = result.created ? 201 : 200;
@@ -484,13 +492,14 @@ export class StreamDO implements DurableObject {
         [CACHE_CONTROL_HEADER]: HEAD_CACHE_CONTROL_VALUE,
         ETag: result.etag,
         [STREAM_OFFSET_HEADER]: result.nextOffset,
-        ...streamClosedHeaders(result.closed),
+        ...streamMetadataHeaders(result),
       },
     });
   }
 
   private async handleDelete(path: string): Promise<Response> {
-    if (!this.store.has(path)) {
+    const head = await this.store.head(path);
+    if (!head) {
       return new Response(`Stream not found: ${path}`, { status: 404 });
     }
 

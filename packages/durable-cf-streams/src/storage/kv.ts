@@ -1,6 +1,6 @@
 import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
-import { StreamNotFoundError } from "../errors.js";
+import { StreamConflictError, StreamNotFoundError } from "../errors.js";
 import { initialOffset, offsetToBytePos } from "../offsets.js";
 import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
@@ -28,8 +28,11 @@ import type {
 import type { StreamStore } from "./interface.js";
 import {
   appendResult,
+  assertStreamLive,
   closedAppendResult,
+  inheritedExpiration,
   prepareAppendData,
+  prepareForkData,
   prepareInitialData,
   validateAppendContentType,
   validateAppendSeq,
@@ -65,10 +68,92 @@ export class KVStore implements StreamStore {
     return metadata === null ? null : decodePersistedStreamMetadata(metadata);
   }
 
-  async put(path: string, options: PutOptions): Promise<PutResult> {
-    const existingMeta = await this.getMetadata(path);
+  private async putMetadata(path: string, meta: StreamRecord): Promise<void> {
+    await this.kv.put(this.metaKey(path), JSON.stringify(meta));
+  }
 
-    if (existingMeta && !isExpired(existingMeta)) {
+  private async getData(path: string): Promise<Uint8Array> {
+    const raw = await this.kv.get(this.dataKey(path), "arrayBuffer");
+    return raw ? new Uint8Array(raw) : new Uint8Array(0);
+  }
+
+  private async getStreamMetadata(path: string): Promise<StreamRecord | null> {
+    const meta = await this.getMetadata(path);
+    if (!meta) {
+      return null;
+    }
+
+    if (isExpired(meta)) {
+      return await this.expireStream(path, meta);
+    }
+
+    return meta;
+  }
+
+  private async touchMetadata(
+    path: string,
+    meta: StreamRecord
+  ): Promise<StreamRecord> {
+    if (meta.ttlSeconds === undefined) {
+      return meta;
+    }
+    const updated = { ...meta, lastAccessedAt: Date.now() };
+    await this.putMetadata(path, updated);
+    return updated;
+  }
+
+  private async expireStream(
+    path: string,
+    meta: StreamRecord
+  ): Promise<StreamRecord | null> {
+    if ((meta.childCount ?? 0) > 0) {
+      const updated = { ...meta, deleted: true };
+      await this.putMetadata(path, updated);
+      this.notifyDeleted(path);
+      return updated;
+    }
+
+    await this.hardDelete(path, meta);
+    return null;
+  }
+
+  private async hardDelete(path: string, meta: StreamRecord): Promise<void> {
+    this.notifyDeleted(path);
+    await Promise.all([
+      this.kv.delete(this.metaKey(path)),
+      this.kv.delete(this.dataKey(path)),
+    ]);
+    await this.releaseParent(meta.forkedFrom);
+  }
+
+  private async releaseParent(parentPath: string | undefined): Promise<void> {
+    if (!parentPath) {
+      return;
+    }
+
+    const parent = await this.getMetadata(parentPath);
+    if (!parent) {
+      return;
+    }
+
+    const childCount = Math.max(0, (parent.childCount ?? 0) - 1);
+    const updated = { ...parent, childCount };
+
+    if (updated.deleted === true && childCount === 0) {
+      await this.hardDelete(parentPath, updated);
+      return;
+    }
+
+    await this.putMetadata(parentPath, updated);
+  }
+
+  async put(path: string, options: PutOptions): Promise<PutResult> {
+    const existingMeta = await this.getStreamMetadata(path);
+
+    if (existingMeta) {
+      if (existingMeta.deleted === true) {
+        throw new StreamConflictError("stream is gone");
+      }
       validateIdempotentCreate(existingMeta, options);
       return {
         created: false,
@@ -77,34 +162,63 @@ export class KVStore implements StreamStore {
       };
     }
 
-    if (existingMeta) {
-      await Promise.all([
-        this.kv.delete(this.metaKey(path)),
-        this.kv.delete(this.dataKey(path)),
-      ]);
+    let contentType = options.contentType;
+    let ttlSeconds = options.ttlSeconds;
+    let expiresAt = options.expiresAt;
+    let closed = options.closed === true;
+    let forkedFrom: string | undefined;
+    let forkOffset: Offset | undefined;
+    let prepared = prepareInitialData(options);
+
+    if (options.forkedFrom !== undefined) {
+      const source = await this.getStreamMetadata(options.forkedFrom);
+      if (!source) {
+        throw new StreamNotFoundError(options.forkedFrom);
+      }
+      if (source.deleted === true) {
+        throw new StreamConflictError("fork source is gone");
+      }
+      validateAppendContentType(source.contentType, contentType);
+
+      const sourceData = await this.getData(options.forkedFrom);
+      forkedFrom = options.forkedFrom;
+      forkOffset = options.forkOffset ?? source.nextOffset;
+      prepared = prepareForkData(sourceData, forkOffset);
+      ({ ttlSeconds, expiresAt } = inheritedExpiration(source, options));
+      contentType = source.contentType;
+      closed = false;
+
+      await this.putMetadata(options.forkedFrom, {
+        ...source,
+        childCount: (source.childCount ?? 0) + 1,
+      });
     }
 
-    const { data, appendCount, nextOffset } = prepareInitialData(options);
-
+    const now = Date.now();
     const meta: StreamRecord = {
-      contentType: options.contentType,
-      ttlSeconds: options.ttlSeconds,
-      expiresAt: options.expiresAt,
-      createdAt: Date.now(),
-      nextOffset,
-      appendCount,
+      contentType,
+      ttlSeconds,
+      expiresAt,
+      createdAt: now,
+      lastAccessedAt: now,
+      nextOffset: prepared.nextOffset,
+      appendCount: prepared.appendCount,
       producers: {},
-      closed: options.closed === true,
+      closed,
+      forkedFrom,
+      forkOffset,
+      childCount: 0,
+      deleted: false,
     };
 
     await Promise.all([
-      this.kv.put(this.metaKey(path), JSON.stringify(meta)),
-      this.kv.put(this.dataKey(path), data),
+      this.putMetadata(path, meta),
+      this.kv.put(this.dataKey(path), prepared.data),
     ]);
 
-    this.streamCache.set(path, { contentType: options.contentType });
+    this.streamCache.set(path, { contentType });
 
-    return { created: true, nextOffset, closed: meta.closed };
+    return { created: true, nextOffset: meta.nextOffset, closed: meta.closed };
   }
 
   async append(
@@ -112,11 +226,12 @@ export class KVStore implements StreamStore {
     data: Uint8Array,
     options?: AppendOptions
   ): Promise<AppendResult> {
-    const meta = await this.getMetadata(path);
+    let meta = await this.getStreamMetadata(path);
 
-    if (!meta || isExpired(meta)) {
+    if (!meta) {
       throw new StreamNotFoundError(path);
     }
+    assertStreamLive(path, meta);
 
     const producers = meta.producers;
     const producerDecision = evaluateProducerAppend(
@@ -132,6 +247,7 @@ export class KVStore implements StreamStore {
       producerDecision
     );
     if (closedResult) {
+      await this.touchMetadata(path, meta);
       return closedResult;
     }
 
@@ -140,6 +256,7 @@ export class KVStore implements StreamStore {
     }
 
     if (producerDecision._tag === "Duplicate") {
+      await this.touchMetadata(path, meta);
       return {
         nextOffset: meta.nextOffset,
         producer: producerDecision.result,
@@ -149,10 +266,7 @@ export class KVStore implements StreamStore {
     }
     validateAppendSeq(meta.lastSeq, options?.seq);
 
-    const existingRaw = await this.kv.get(this.dataKey(path), "arrayBuffer");
-    const existingData = existingRaw
-      ? new Uint8Array(existingRaw)
-      : new Uint8Array(0);
+    const existingData = await this.getData(path);
 
     const append = prepareAppendData(
       existingData,
@@ -162,6 +276,7 @@ export class KVStore implements StreamStore {
       meta.nextOffset
     );
 
+    meta = await this.touchMetadata(path, meta);
     const updatedMeta: StreamRecord = {
       ...meta,
       nextOffset: append.nextOffset,
@@ -187,17 +302,18 @@ export class KVStore implements StreamStore {
   }
 
   async get(path: string, options?: GetOptions): Promise<GetResult> {
-    const meta = await this.getMetadata(path);
+    let meta = await this.getStreamMetadata(path);
 
-    if (!meta || isExpired(meta)) {
+    if (!meta) {
       this.streamCache.delete(path);
       throw new StreamNotFoundError(path);
     }
+    assertStreamLive(path, meta);
+    meta = await this.touchMetadata(path, meta);
 
     this.streamCache.set(path, { contentType: meta.contentType });
 
-    const raw = await this.kv.get(this.dataKey(path), "arrayBuffer");
-    const data = raw ? new Uint8Array(raw) : new Uint8Array(0);
+    const data = await this.getData(path);
 
     const startOffset = options?.offset ?? initialOffset();
     const byteOffset = offsetToBytePos(startOffset);
@@ -224,12 +340,13 @@ export class KVStore implements StreamStore {
   }
 
   async head(path: string): Promise<HeadResult | null> {
-    const meta = await this.getMetadata(path);
+    const meta = await this.getStreamMetadata(path);
 
-    if (!meta || isExpired(meta)) {
+    if (!meta) {
       this.streamCache.delete(path);
       return null;
     }
+    assertStreamLive(path, meta);
 
     this.streamCache.set(path, { contentType: meta.contentType });
 
@@ -238,23 +355,26 @@ export class KVStore implements StreamStore {
       nextOffset: meta.nextOffset,
       etag: generateETag(path, initialOffset(), meta.nextOffset),
       closed: meta.closed === true,
+      ttlSeconds: meta.ttlSeconds,
+      expiresAt: meta.expiresAt,
     };
   }
 
   async delete(path: string): Promise<void> {
-    const waiters = this.waiters.get(path) ?? [];
-    const effect = Effect.forEach(waiters, (waiter) =>
-      Deferred.succeed(waiter.deferred, { messages: [], timedOut: false })
-    );
-    Effect.runSync(effect);
+    const meta = await this.getStreamMetadata(path);
+    if (!meta) {
+      return;
+    }
 
-    this.waiters.delete(path);
-    this.streamCache.delete(path);
+    assertStreamLive(path, meta);
 
-    await Promise.all([
-      this.kv.delete(this.metaKey(path)),
-      this.kv.delete(this.dataKey(path)),
-    ]);
+    if ((meta.childCount ?? 0) > 0) {
+      await this.putMetadata(path, { ...meta, deleted: true });
+      this.notifyDeleted(path);
+      return;
+    }
+
+    await this.hardDelete(path, meta);
   }
 
   has(path: string): boolean {
@@ -266,14 +386,15 @@ export class KVStore implements StreamStore {
     offset: Offset,
     timeoutMs: number
   ): Promise<WaitResult> {
-    const meta = await this.getMetadata(path);
+    let meta = await this.getStreamMetadata(path);
 
-    if (!meta || isExpired(meta)) {
+    if (!meta) {
       throw new StreamNotFoundError(path);
     }
+    assertStreamLive(path, meta);
+    meta = await this.touchMetadata(path, meta);
 
-    const raw = await this.kv.get(this.dataKey(path), "arrayBuffer");
-    const data = raw ? new Uint8Array(raw) : new Uint8Array(0);
+    const data = await this.getData(path);
 
     const byteOffset = offsetToBytePos(offset);
 
@@ -381,5 +502,16 @@ export class KVStore implements StreamStore {
     });
 
     Effect.runSync(effect);
+  }
+
+  private notifyDeleted(path: string): void {
+    const waiters = this.waiters.get(path) ?? [];
+    const effect = Effect.forEach(waiters, (waiter) =>
+      Deferred.succeed(waiter.deferred, { messages: [], timedOut: false })
+    );
+    Effect.runSync(effect);
+
+    this.waiters.delete(path);
+    this.streamCache.delete(path);
   }
 }

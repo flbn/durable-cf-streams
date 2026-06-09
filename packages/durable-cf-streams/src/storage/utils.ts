@@ -1,10 +1,12 @@
 import {
   ContentTypeMismatchError,
+  InvalidOffsetError,
   SequenceConflictError,
   StreamClosedError,
   StreamConflictError,
+  StreamGoneError,
 } from "../errors.js";
-import { formatOffset } from "../offsets.js";
+import { formatOffset, offsetToBytePos, parseOffset } from "../offsets.js";
 import type { ProducerAppendDecision } from "../producer.js";
 import {
   isJsonContentType,
@@ -24,6 +26,38 @@ export type IdempotentCreateInfo = {
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly closed?: boolean;
+  readonly forkedFrom?: string;
+  readonly forkOffset?: Offset;
+  readonly deleted?: boolean;
+};
+
+export type ExpirationMetadata = {
+  readonly ttlSeconds?: number;
+  readonly expiresAt?: string;
+};
+
+export const assertStreamLive = (
+  path: string,
+  info: { readonly deleted?: boolean }
+): void => {
+  if (info.deleted === true) {
+    throw new StreamGoneError(path);
+  }
+};
+
+export const inheritedExpiration = (
+  source: ExpirationMetadata,
+  options: PutOptions
+): ExpirationMetadata => {
+  if (options.ttlSeconds !== undefined) {
+    return { ttlSeconds: options.ttlSeconds };
+  }
+
+  if (options.expiresAt !== undefined) {
+    return { expiresAt: options.expiresAt };
+  }
+
+  return source;
 };
 
 export const validateIdempotentCreate = (
@@ -37,6 +71,26 @@ export const validateIdempotentCreate = (
     throw new ContentTypeMismatchError(existingNormalized, reqNormalized);
   }
 
+  if (options.forkedFrom !== undefined) {
+    validateIdempotentForkCreate(existing, options);
+    return;
+  }
+
+  validateIdempotentRegularCreate(existing, options);
+
+  if ((options.closed ?? false) !== (existing.closed ?? false)) {
+    throw new StreamConflictError("closed state mismatch on idempotent create");
+  }
+};
+
+const validateIdempotentRegularCreate = (
+  existing: IdempotentCreateInfo,
+  options: PutOptions
+): void => {
+  if (existing.forkedFrom !== undefined) {
+    throw new StreamConflictError("fork source mismatch on idempotent create");
+  }
+
   if (options.ttlSeconds !== existing.ttlSeconds) {
     throw new StreamConflictError("TTL mismatch on idempotent create");
   }
@@ -44,9 +98,35 @@ export const validateIdempotentCreate = (
   if (options.expiresAt !== existing.expiresAt) {
     throw new StreamConflictError("Expires-At mismatch on idempotent create");
   }
+};
 
-  if ((options.closed ?? false) !== (existing.closed ?? false)) {
-    throw new StreamConflictError("closed state mismatch on idempotent create");
+const validateIdempotentForkCreate = (
+  existing: IdempotentCreateInfo,
+  options: PutOptions
+): void => {
+  if (options.forkedFrom !== existing.forkedFrom) {
+    throw new StreamConflictError("fork source mismatch on idempotent create");
+  }
+
+  if (
+    options.forkOffset !== undefined &&
+    options.forkOffset !== existing.forkOffset
+  ) {
+    throw new StreamConflictError("fork offset mismatch on idempotent create");
+  }
+
+  if (
+    options.ttlSeconds !== undefined &&
+    options.ttlSeconds !== existing.ttlSeconds
+  ) {
+    throw new StreamConflictError("TTL mismatch on idempotent create");
+  }
+
+  if (
+    options.expiresAt !== undefined &&
+    options.expiresAt !== existing.expiresAt
+  ) {
+    throw new StreamConflictError("Expires-At mismatch on idempotent create");
   }
 };
 
@@ -68,6 +148,23 @@ export const prepareInitialData = (options: PutOptions): PreparedData => {
   const nextOffset = formatOffset(appendCount, data.length);
 
   return { data, appendCount, nextOffset };
+};
+
+export const prepareForkData = (
+  sourceData: Uint8Array,
+  forkOffset: Offset
+): PreparedData => {
+  const byteOffset = offsetToBytePos(forkOffset);
+  if (byteOffset > sourceData.length) {
+    throw new InvalidOffsetError(forkOffset);
+  }
+
+  const parsedOffset = parseOffset(forkOffset);
+  return {
+    data: sourceData.slice(0, byteOffset),
+    appendCount: parsedOffset?.seq ?? 0,
+    nextOffset: forkOffset,
+  };
 };
 
 export const validateAppendContentType = (

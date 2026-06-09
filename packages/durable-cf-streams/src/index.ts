@@ -18,6 +18,8 @@ export {
   STREAM_CLOSED_HEADER,
   STREAM_CURSOR_HEADER,
   STREAM_EXPIRES_AT_HEADER,
+  STREAM_FORK_OFFSET_HEADER,
+  STREAM_FORKED_FROM_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
   STREAM_SSE_DATA_ENCODING_HEADER,
@@ -45,6 +47,7 @@ export {
   StreamClosedError,
   StreamConflictError,
   type StreamError,
+  StreamGoneError,
   StreamNotFoundError,
   streamErrorStatus,
 } from "./errors.js";
