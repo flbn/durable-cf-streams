@@ -50,12 +50,12 @@ export class MemoryStore implements StreamStore {
   private getStream(path: string): StoredStream | undefined {
     const stream = this.streams.get(path);
     if (!stream) {
-      return undefined;
+      return;
     }
 
     if (isMetadataExpired(stream.metadata)) {
       this.streams.delete(path);
-      return undefined;
+      return;
     }
 
     return stream;

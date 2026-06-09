@@ -22,9 +22,9 @@
     "node": "22.16.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.8",
-    "turbo": "2.8.20",
-    "ultracite": "7.3.2"
+    "@biomejs/biome": "2.4.16",
+    "turbo": "2.9.16",
+    "ultracite": "7.8.1"
   },
   "dependencies": {
     "durable-cf-streams": "workspace:*"
