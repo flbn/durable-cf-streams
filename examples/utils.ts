@@ -1,10 +1,12 @@
 import type { AppendResult, Offset, StreamStore } from "durable-cf-streams";
 import {
   CACHE_CONTROL_HEADER,
+  DEFAULT_CONTENT_TYPE,
   HEAD_CACHE_CONTROL_VALUE,
   isSSETextCompatibleContentType,
   isStreamError,
   isValidOffset,
+  normalizeContentType,
   normalizeOffset,
   PRODUCER_EPOCH_HEADER,
   PRODUCER_EXPECTED_SEQ_HEADER,
@@ -135,6 +137,18 @@ export function parseForkOptions(request: Request): ForkOptionsResult {
     forkedFrom,
     forkOffset: normalizeOffset(forkOffsetHeader),
   };
+}
+
+export function parsePutContentType(
+  request: Request,
+  forkedFrom: string | undefined
+): string | undefined {
+  const contentType = request.headers.get("content-type");
+  if (contentType) {
+    return normalizeContentType(contentType);
+  }
+
+  return forkedFrom === undefined ? DEFAULT_CONTENT_TYPE : undefined;
 }
 
 export type LiveModeResult =

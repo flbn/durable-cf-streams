@@ -34,6 +34,7 @@ import {
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
+  resolveCreateContentType,
   validateAppendContentType,
   validateAppendSeq,
   validateIdempotentCreate,
@@ -177,11 +178,12 @@ export class R2Store implements StreamStore {
       return {
         created: false,
         nextOffset: existingMeta.nextOffset,
+        contentType: existingMeta.contentType,
         closed: existingMeta.closed,
       };
     }
 
-    let contentType = options.contentType;
+    let contentType = resolveCreateContentType(options);
     let ttlSeconds = options.ttlSeconds;
     let expiresAt = options.expiresAt;
     let closed = options.closed === true;
@@ -197,7 +199,7 @@ export class R2Store implements StreamStore {
       if (source.deleted === true) {
         throw new StreamConflictError("fork source is gone");
       }
-      validateAppendContentType(source.contentType, contentType);
+      validateAppendContentType(source.contentType, options.contentType);
 
       const sourceData = await this.getData(options.forkedFrom);
       forkedFrom = options.forkedFrom;
@@ -237,7 +239,12 @@ export class R2Store implements StreamStore {
 
     this.streamCache.set(path, { contentType });
 
-    return { created: true, nextOffset: meta.nextOffset, closed: meta.closed };
+    return {
+      created: true,
+      nextOffset: meta.nextOffset,
+      contentType: meta.contentType,
+      closed: meta.closed,
+    };
   }
 
   async append(

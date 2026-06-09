@@ -1,3 +1,4 @@
+import { DEFAULT_CONTENT_TYPE } from "../const.js";
 import {
   ContentTypeMismatchError,
   InvalidOffsetError,
@@ -65,7 +66,12 @@ export const validateIdempotentCreate = (
   options: PutOptions
 ): void => {
   const existingNormalized = normalizeContentType(existing.contentType);
-  const reqNormalized = normalizeContentType(options.contentType);
+  const requestedContentType =
+    options.contentType ??
+    (options.forkedFrom === undefined
+      ? DEFAULT_CONTENT_TYPE
+      : existing.contentType);
+  const reqNormalized = normalizeContentType(requestedContentType);
 
   if (existingNormalized !== reqNormalized) {
     throw new ContentTypeMismatchError(existingNormalized, reqNormalized);
@@ -136,9 +142,12 @@ export type PreparedData = {
   readonly nextOffset: Offset;
 };
 
+export const resolveCreateContentType = (options: PutOptions): string =>
+  options.contentType ?? DEFAULT_CONTENT_TYPE;
+
 export const prepareInitialData = (options: PutOptions): PreparedData => {
   let data = options.data ?? new Uint8Array(0);
-  const isJson = isJsonContentType(options.contentType);
+  const isJson = isJsonContentType(resolveCreateContentType(options));
 
   if (isJson && data.length > 0) {
     data = validateJsonCreate(data, true);

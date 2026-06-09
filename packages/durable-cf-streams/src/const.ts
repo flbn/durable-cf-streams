@@ -25,6 +25,7 @@ export const PROTOCOL_SECURITY_HEADERS = {
 
 export const HEAD_CACHE_CONTROL_VALUE = "no-store";
 export const SSE_CACHE_CONTROL_VALUE = "no-cache";
+export const DEFAULT_CONTENT_TYPE = "application/octet-stream";
 
 export const OFFSET_QUERY_PARAM = "offset";
 export const TAIL_OFFSET_QUERY_VALUE = "now";

@@ -24,6 +24,7 @@ import {
   mapError,
   parseForkOptions,
   parseProducerOptions,
+  parsePutContentType,
   parseTtlAndExpires,
   pumpSSEStream,
   resolveReadRequest,
@@ -108,9 +109,6 @@ export class StreamDO implements DurableObject {
   }
 
   private async handlePut(path: string, request: Request): Promise<Response> {
-    const contentType =
-      request.headers.get("content-type") ?? "application/octet-stream";
-
     const ttlResult = parseTtlAndExpires(request);
     if (!ttlResult.ok) {
       return ttlResult.error;
@@ -120,12 +118,13 @@ export class StreamDO implements DurableObject {
     if (!forkResult.ok) {
       return forkResult.error;
     }
+    const contentType = parsePutContentType(request, forkResult.forkedFrom);
 
     const body = await request.arrayBuffer();
     const data = new Uint8Array(body);
 
     const result = await this.store.put(path, {
-      contentType: normalizeContentType(contentType),
+      contentType,
       ttlSeconds,
       expiresAt,
       data: data.length > 0 ? data : undefined,
@@ -137,7 +136,7 @@ export class StreamDO implements DurableObject {
     const status = result.created ? 201 : 200;
     const headers: Record<string, string> = {
       [STREAM_OFFSET_HEADER]: result.nextOffset,
-      "Content-Type": normalizeContentType(contentType),
+      "Content-Type": result.contentType,
       ...streamClosedHeaders(result.closed),
     };
     if (result.created) {

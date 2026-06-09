@@ -82,6 +82,7 @@ import {
   PROTOCOL_SECURITY_HEADERS,
   HEAD_CACHE_CONTROL_VALUE, // "no-store"
   SSE_CACHE_CONTROL_VALUE,  // "no-cache"
+  DEFAULT_CONTENT_TYPE,     // "application/octet-stream"
 
   // query param constants
   OFFSET_QUERY_PARAM,       // "offset"
@@ -218,17 +219,20 @@ export class StreamDO extends DurableObject {
     const path = new URL(request.url).pathname;
 
     if (request.method === "PUT") {
-      const contentType = request.headers.get("content-type") ?? "application/octet-stream";
+      const contentType = request.headers.get("content-type");
       const body = new Uint8Array(await request.arrayBuffer());
       
       const result = await this.store.put(path, {
-        contentType: normalizeContentType(contentType),
+        contentType: contentType ? normalizeContentType(contentType) : undefined,
         data: body.length > 0 ? body : undefined,
       });
 
       return new Response(null, {
         status: result.created ? 201 : 200,
-        headers: { [STREAM_OFFSET_HEADER]: result.nextOffset },
+        headers: {
+          [STREAM_OFFSET_HEADER]: result.nextOffset,
+          "Content-Type": result.contentType,
+        },
       });
     }
 

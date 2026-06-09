@@ -32,6 +32,7 @@ import {
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
+  resolveCreateContentType,
   validateAppendContentType,
   validateAppendSeq,
   validateIdempotentCreate,
@@ -135,11 +136,12 @@ export class MemoryStore implements StreamStore {
       return Promise.resolve({
         created: false,
         nextOffset: existing.nextOffset,
+        contentType: existing.metadata.contentType,
         closed: existing.closed,
       });
     }
 
-    let contentType = options.contentType;
+    let contentType = resolveCreateContentType(options);
     let ttlSeconds = options.ttlSeconds;
     let expiresAt = options.expiresAt;
     let closed = options.closed === true;
@@ -155,7 +157,10 @@ export class MemoryStore implements StreamStore {
       if (source.metadata.deleted === true) {
         throw new StreamConflictError("fork source is gone");
       }
-      validateAppendContentType(source.metadata.contentType, contentType);
+      validateAppendContentType(
+        source.metadata.contentType,
+        options.contentType
+      );
 
       forkedFrom = options.forkedFrom;
       forkOffset = options.forkOffset ?? source.nextOffset;
@@ -200,6 +205,7 @@ export class MemoryStore implements StreamStore {
     return Promise.resolve({
       created: true,
       nextOffset: stream.nextOffset,
+      contentType: stream.metadata.contentType,
       closed: stream.closed,
     });
   }

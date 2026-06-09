@@ -31,6 +31,7 @@ import {
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
+  resolveCreateContentType,
   validateAppendContentType,
   validateAppendSeq,
   validateIdempotentCreate,
@@ -228,7 +229,7 @@ export class SqliteStore implements StreamStore {
       const prepared = prepareInitialData(options);
       return {
         ...prepared,
-        contentType: options.contentType,
+        contentType: resolveCreateContentType(options),
         ttlSeconds: options.ttlSeconds,
         expiresAt: options.expiresAt,
         closed: options.closed === true,
@@ -301,6 +302,7 @@ export class SqliteStore implements StreamStore {
     return {
       created: false,
       nextOffset: existing.next_offset,
+      contentType: existing.content_type,
       closed: existing.closed === 1,
     };
   }
@@ -338,6 +340,7 @@ export class SqliteStore implements StreamStore {
     return Promise.resolve({
       created: true,
       nextOffset: prepared.nextOffset,
+      contentType: prepared.contentType,
       closed: prepared.closed,
     });
   }

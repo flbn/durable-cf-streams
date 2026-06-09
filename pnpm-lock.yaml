@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@durable-streams/server-conformance-tests':
-      specifier: 0.3.0
-      version: 0.3.0
+      specifier: 0.3.1
+      version: 0.3.1
     vitest:
       specifier: 4.1.8
       version: 4.1.8
@@ -42,7 +42,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -61,7 +61,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -80,7 +80,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -96,7 +96,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -112,7 +112,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -128,7 +128,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -144,7 +144,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.0(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -285,13 +285,13 @@ packages:
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
 
-  '@durable-streams/client@0.2.3':
-    resolution: {integrity: sha512-609hWTqe8/OXzIFnv+oDdlT57QsCAc3F2c/nAQBcYhSLmmbXk5rHx7rnQSmk9MeGGQ8dsg9UCZf47dTJG3q3ig==}
+  '@durable-streams/client@0.2.4':
+    resolution: {integrity: sha512-g3mm4sIoeZrrIBqiQuHnhRQ7ffxvqsgvqxR9Vr432See5mc5zGNrPH7uhKf/al807d3lsf8LO8u6uUeeqBtEdA==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
-  '@durable-streams/server-conformance-tests@0.3.0':
-    resolution: {integrity: sha512-hjzSIt049lV3klHwgJXanZjVyluS8g0hjxqMUuCsizaXUL1kpUPksZAaA0BDUjEqwom8I7HHh9zweT1BHqBuow==}
+  '@durable-streams/server-conformance-tests@0.3.1':
+    resolution: {integrity: sha512-BKNN3/oKc3XZ4K8/U3KIbV4Sng8OeMxAvY0GUujuUBfxFJcxodonVYjJbdylDl2tyWY5K3/EcbdoTM3O9U6yhw==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -1690,14 +1690,14 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@durable-streams/client@0.2.3':
+  '@durable-streams/client@0.2.4':
     dependencies:
       '@microsoft/fetch-event-source': 2.0.1
       fastq: 1.20.1
 
-  '@durable-streams/server-conformance-tests@0.3.0(vite@7.3.0(yaml@2.9.0))':
+  '@durable-streams/server-conformance-tests@0.3.1(vite@7.3.0(yaml@2.9.0))':
     dependencies:
-      '@durable-streams/client': 0.2.3
+      '@durable-streams/client': 0.2.4
       fast-check: 4.5.2
       vitest: 4.1.8(vite@7.3.0(yaml@2.9.0))
     transitivePeerDependencies:

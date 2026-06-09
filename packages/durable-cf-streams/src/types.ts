@@ -29,7 +29,7 @@ export type StreamMetadata = {
 };
 
 export type PutOptions = {
-  readonly contentType: string;
+  readonly contentType?: string;
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly data?: Uint8Array;
@@ -41,6 +41,7 @@ export type PutOptions = {
 export type PutResult = {
   readonly created: boolean;
   readonly nextOffset: Offset;
+  readonly contentType: string;
   readonly closed?: boolean;
 };
 
