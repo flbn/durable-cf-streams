@@ -5,6 +5,6 @@ packages:
 minimumReleaseAge: 10080 # 7 days
 
 catalog:
-  "@durable-streams/server-conformance-tests": 0.1.4
-  vitest: 4.1.1
-  wrangler: 4.76.0
+  "@durable-streams/server-conformance-tests": 0.3.4
+  vitest: 4.1.8
+  wrangler: 4.97.0
