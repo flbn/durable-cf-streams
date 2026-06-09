@@ -4,18 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-catalogs:
-  default:
-    '@durable-streams/server-conformance-tests':
-      specifier: 0.1.4
-      version: 0.1.4
-    vitest:
-      specifier: 4.1.8
-      version: 4.1.8
-    wrangler:
-      specifier: 4.97.0
-      version: 4.97.0
-
 overrides:
   '@durable-streams/client': 0.1.0
 
