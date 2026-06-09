@@ -1,6 +1,9 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "extends": ["ultracite/core"],
+  "files": {
+    "includes": ["!examples/*/worker-configuration.d.ts"]
+  },
   "linter": {
     "rules": {
       "complexity": {

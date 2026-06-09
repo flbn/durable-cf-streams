@@ -50,7 +50,8 @@ when the upstream protocol changes:
 
 ```bash
 # 1. update conformance tests
-pnpm update @durable-streams/server-conformance-tests -r --filter "./examples/*"
+# edit @durable-streams/server-conformance-tests in pnpm-workspace.yaml#catalog
+pnpm install --lockfile-only --no-frozen-lockfile
 
 # 2. build and test
 pnpm run build

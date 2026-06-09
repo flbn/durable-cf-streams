@@ -1,3 +1,10 @@
 packages:
   - "packages/*"
   - "examples/*"
+
+minimumReleaseAge: 10080 # 7 days
+
+catalog:
+  "@durable-streams/server-conformance-tests": 0.1.4
+  vitest: 4.1.1
+  wrangler: 4.76.0
