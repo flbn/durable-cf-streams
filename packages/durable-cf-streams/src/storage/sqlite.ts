@@ -2,12 +2,14 @@ import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
   isExpired,
   isJsonContentType,
 } from "../protocol.js";
+import { decodeProducerStateMapJson } from "../schema.js";
 import type {
   AppendOptions,
   AppendResult,
@@ -38,6 +40,7 @@ type StreamRow = {
   data: ArrayBuffer;
   next_offset: Offset;
   last_seq: string | null;
+  producers: string;
   append_count: number;
 };
 
@@ -72,6 +75,7 @@ export class SqliteStore implements StreamStore {
       data BLOB NOT NULL DEFAULT x'',
       next_offset TEXT NOT NULL,
       last_seq TEXT,
+      producers TEXT NOT NULL DEFAULT '{}',
       append_count INTEGER NOT NULL DEFAULT 0
     )
   `;
@@ -125,8 +129,8 @@ export class SqliteStore implements StreamStore {
     const { data, appendCount, nextOffset } = prepareInitialData(options);
 
     this.sql.exec(
-      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, append_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, producers, append_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       path,
       options.contentType,
       options.ttlSeconds ?? null,
@@ -134,6 +138,7 @@ export class SqliteStore implements StreamStore {
       Date.now(),
       data,
       nextOffset,
+      "{}",
       appendCount
     );
 
@@ -152,6 +157,17 @@ export class SqliteStore implements StreamStore {
     }
 
     validateAppendContentType(stream.content_type, options?.contentType);
+    const producers = decodeProducerStateMapJson(stream.producers);
+    const producerDecision = evaluateProducerAppend(
+      producers,
+      options?.producer
+    );
+    if (producerDecision._tag === "Duplicate") {
+      return Promise.resolve({
+        nextOffset: stream.next_offset,
+        producer: producerDecision.result,
+      });
+    }
     validateAppendSeq(stream.last_seq ?? undefined, options?.seq);
 
     const isJson = isJsonContentType(stream.content_type);
@@ -162,17 +178,23 @@ export class SqliteStore implements StreamStore {
     const nextOffset = formatOffset(newAppendCount, newData.length);
 
     this.sql.exec(
-      "UPDATE streams SET data = ?, next_offset = ?, append_count = ?, last_seq = ? WHERE path = ?",
+      "UPDATE streams SET data = ?, next_offset = ?, append_count = ?, last_seq = ?, producers = ? WHERE path = ?",
       newData,
       nextOffset,
       newAppendCount,
       options?.seq ?? stream.last_seq,
+      JSON.stringify(commitProducerAppend(producers, producerDecision)),
       path
     );
 
     this.notifyWaiters(path, newData);
 
-    return Promise.resolve({ nextOffset });
+    return Promise.resolve({
+      nextOffset,
+      ...(producerDecision._tag === "Accepted"
+        ? { producer: producerDecision.result }
+        : {}),
+    });
   }
 
   get(path: string, options?: GetOptions): Promise<GetResult> {

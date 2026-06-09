@@ -2,12 +2,14 @@ import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
   isExpired,
   isJsonContentType,
 } from "../protocol.js";
+import { decodeProducerStateMapJson } from "../schema.js";
 import type {
   AppendOptions,
   AppendResult,
@@ -38,6 +40,7 @@ type StreamRow = {
   data: ArrayBuffer;
   next_offset: Offset;
   last_seq: string | null;
+  producers: string;
   append_count: number;
 };
 
@@ -67,7 +70,7 @@ export class D1Store implements StreamStore {
   }
 
   static schema =
-    "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, data BLOB NOT NULL DEFAULT x'', next_offset TEXT NOT NULL, last_seq TEXT, append_count INTEGER NOT NULL DEFAULT 0);";
+    "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, data BLOB NOT NULL DEFAULT x'', next_offset TEXT NOT NULL, last_seq TEXT, producers TEXT NOT NULL DEFAULT '{}', append_count INTEGER NOT NULL DEFAULT 0);";
 
   async initialize(): Promise<void> {
     await this.db.exec(D1Store.schema);
@@ -113,8 +116,8 @@ export class D1Store implements StreamStore {
 
     await this.db
       .prepare(`
-        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, append_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, data, next_offset, producers, append_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .bind(
         path,
@@ -124,6 +127,7 @@ export class D1Store implements StreamStore {
         Date.now(),
         data,
         nextOffset,
+        "{}",
         appendCount
       )
       .run();
@@ -140,7 +144,7 @@ export class D1Store implements StreamStore {
   ): Promise<AppendResult> {
     const stream = await this.db
       .prepare(
-        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset, last_seq, append_count FROM streams WHERE path = ?"
+        "SELECT content_type, ttl_seconds, expires_at, created_at, data, next_offset, last_seq, producers, append_count FROM streams WHERE path = ?"
       )
       .bind(path)
       .first<
@@ -153,6 +157,7 @@ export class D1Store implements StreamStore {
           | "data"
           | "next_offset"
           | "last_seq"
+          | "producers"
           | "append_count"
         >
       >();
@@ -162,6 +167,17 @@ export class D1Store implements StreamStore {
     }
 
     validateAppendContentType(stream.content_type, options?.contentType);
+    const producers = decodeProducerStateMapJson(stream.producers);
+    const producerDecision = evaluateProducerAppend(
+      producers,
+      options?.producer
+    );
+    if (producerDecision._tag === "Duplicate") {
+      return {
+        nextOffset: stream.next_offset,
+        producer: producerDecision.result,
+      };
+    }
     validateAppendSeq(stream.last_seq ?? undefined, options?.seq);
 
     const existingData = new Uint8Array(stream.data);
@@ -174,13 +190,14 @@ export class D1Store implements StreamStore {
     await this.db
       .prepare(`
         UPDATE streams
-        SET data = ?, next_offset = ?, last_seq = ?, append_count = ?
+        SET data = ?, next_offset = ?, last_seq = ?, producers = ?, append_count = ?
         WHERE path = ?
       `)
       .bind(
         newData,
         nextOffset,
         options?.seq ?? stream.last_seq,
+        JSON.stringify(commitProducerAppend(producers, producerDecision)),
         newAppendCount,
         path
       )
@@ -188,7 +205,12 @@ export class D1Store implements StreamStore {
 
     this.notifyWaiters(path, newData);
 
-    return { nextOffset };
+    return {
+      nextOffset,
+      ...(producerDecision._tag === "Accepted"
+        ? { producer: producerDecision.result }
+        : {}),
+    };
   }
 
   async get(path: string, options?: GetOptions): Promise<GetResult> {

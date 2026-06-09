@@ -2,6 +2,7 @@ import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
@@ -100,6 +101,7 @@ export class R2Store implements StreamStore {
       createdAt: Date.now(),
       nextOffset,
       appendCount,
+      producers: {},
     };
 
     await Promise.all([
@@ -126,6 +128,17 @@ export class R2Store implements StreamStore {
     }
 
     validateAppendContentType(meta.contentType, options?.contentType);
+    const producers = meta.producers;
+    const producerDecision = evaluateProducerAppend(
+      producers,
+      options?.producer
+    );
+    if (producerDecision._tag === "Duplicate") {
+      return {
+        nextOffset: meta.nextOffset,
+        producer: producerDecision.result,
+      };
+    }
     validateAppendSeq(meta.lastSeq, options?.seq);
 
     const existingData = await this.getData(path);
@@ -141,6 +154,7 @@ export class R2Store implements StreamStore {
       nextOffset,
       lastSeq: options?.seq ?? meta.lastSeq,
       appendCount: newAppendCount,
+      producers: commitProducerAppend(producers, producerDecision),
     };
 
     await Promise.all([
@@ -152,7 +166,12 @@ export class R2Store implements StreamStore {
 
     this.notifyWaiters(path, newData);
 
-    return { nextOffset };
+    return {
+      nextOffset,
+      ...(producerDecision._tag === "Accepted"
+        ? { producer: producerDecision.result }
+        : {}),
+    };
   }
 
   async get(path: string, options?: GetOptions): Promise<GetResult> {

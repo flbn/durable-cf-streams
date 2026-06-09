@@ -2,6 +2,8 @@ export type {
   Cursor,
   ETag,
   Offset,
+  ProducerState,
+  ProducerStateMap,
 } from "./schema.js";
 
 import type { Cursor, ETag, Offset } from "./schema.js";
@@ -35,10 +37,25 @@ export type PutResult = {
 export type AppendOptions = {
   readonly contentType?: string;
   readonly seq?: string;
+  readonly producer?: ProducerAppendOptions;
 };
 
 export type AppendResult = {
   readonly nextOffset: Offset;
+  readonly producer?: ProducerAppendResult;
+};
+
+export type ProducerAppendOptions = {
+  readonly id: string;
+  readonly epoch: number;
+  readonly seq: number;
+};
+
+export type ProducerAppendResult = {
+  readonly id: string;
+  readonly epoch: number;
+  readonly seq: number;
+  readonly duplicate: boolean;
 };
 
 export type GetOptions = {

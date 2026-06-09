@@ -53,7 +53,7 @@ export const isJsonContentType = (contentType: string): boolean => {
 export const encodeSSEData = (data: string): string =>
   data
     .split(SSE_LINE_ENDING)
-    .map((line) => `data: ${line}`)
+    .map((line) => `data:${line}`)
     .join("\n");
 
 export const validateTTL = (ttl: string): number | null => {

@@ -65,6 +65,11 @@ import {
   STREAM_SEQ_HEADER,        // "Stream-Seq"
   STREAM_TTL_HEADER,        // "Stream-TTL"
   STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
+  PRODUCER_ID_HEADER,       // "Producer-Id"
+  PRODUCER_EPOCH_HEADER,    // "Producer-Epoch"
+  PRODUCER_SEQ_HEADER,      // "Producer-Seq"
+  PRODUCER_EXPECTED_SEQ_HEADER, // "Producer-Expected-Seq"
+  PRODUCER_RECEIVED_SEQ_HEADER, // "Producer-Received-Seq"
   CACHE_CONTROL_HEADER,     // "Cache-Control"
   CONTENT_TYPE_OPTIONS_HEADER,        // "X-Content-Type-Options"
   CROSS_ORIGIN_RESOURCE_POLICY_HEADER, // "Cross-Origin-Resource-Policy"
@@ -76,6 +81,7 @@ import {
 
   // query param constants
   OFFSET_QUERY_PARAM,       // "offset"
+  TAIL_OFFSET_QUERY_VALUE,  // "now"
   LIVE_QUERY_PARAM,         // "live"
   CURSOR_QUERY_PARAM,       // "cursor"
 
@@ -103,9 +109,13 @@ import {
   CursorSchema,
   ETagSchema,
   OffsetSchema,
+  ProducerStateMapSchema,
+  ProducerStateSchema,
   type Cursor,
   type ETag,
   type Offset,
+  type ProducerState,
+  type ProducerStateMap,
 } from "durable-cf-streams";
 ```
 
@@ -137,6 +147,11 @@ import {
   formatJsonResponse,
   validateJsonCreate,
   encodeSSEData,
+
+  // producer idempotency
+  parseProducerHeaders,
+  evaluateProducerAppend,
+  commitProducerAppend,
 } from "durable-cf-streams";
 ```
 
@@ -151,7 +166,10 @@ import {
   ContentTypeMismatchError,
   InvalidJsonError,
   InvalidOffsetError,
+  InvalidProducerError,
   PayloadTooLargeError,
+  ProducerFencedError,
+  ProducerSequenceConflictError,
   SequenceConflictError,
   StreamConflictError,
   StreamNotFoundError,

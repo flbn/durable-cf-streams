@@ -7,6 +7,11 @@ export {
   HEAD_CACHE_CONTROL_VALUE,
   LIVE_QUERY_PARAM,
   OFFSET_QUERY_PARAM,
+  PRODUCER_EPOCH_HEADER,
+  PRODUCER_EXPECTED_SEQ_HEADER,
+  PRODUCER_ID_HEADER,
+  PRODUCER_RECEIVED_SEQ_HEADER,
+  PRODUCER_SEQ_HEADER,
   PROTOCOL_SECURITY_HEADERS,
   SSE_CACHE_CONTROL_VALUE,
   SSE_COMPATIBLE_CONTENT_TYPES,
@@ -16,6 +21,7 @@ export {
   STREAM_SEQ_HEADER,
   STREAM_TTL_HEADER,
   STREAM_UP_TO_DATE_HEADER,
+  TAIL_OFFSET_QUERY_VALUE,
 } from "./const.js";
 export {
   type CursorOptions,
@@ -28,8 +34,11 @@ export {
   ContentTypeMismatchError,
   InvalidJsonError,
   InvalidOffsetError,
+  InvalidProducerError,
   isStreamError,
   PayloadTooLargeError,
+  ProducerFencedError,
+  ProducerSequenceConflictError,
   SequenceConflictError,
   StreamConflictError,
   type StreamError,
@@ -50,6 +59,12 @@ export {
 } from "./offsets.js";
 export { decodeStreamPath, encodeStreamPath } from "./path.js";
 export {
+  commitProducerAppend,
+  evaluateProducerAppend,
+  type ProducerAppendDecision,
+  parseProducerHeaders,
+} from "./producer.js";
+export {
   type ExpirationInfo,
   encodeSSEData,
   formatJsonResponse,
@@ -64,7 +79,13 @@ export {
   validateJsonCreate,
   validateTTL,
 } from "./protocol.js";
-export { CursorSchema, ETagSchema, OffsetSchema } from "./schema.js";
+export {
+  CursorSchema,
+  ETagSchema,
+  OffsetSchema,
+  ProducerStateMapSchema,
+  ProducerStateSchema,
+} from "./schema.js";
 export type { StreamStore } from "./storage/interface.js";
 export type {
   AppendOptions,
@@ -75,6 +96,10 @@ export type {
   GetResult,
   HeadResult,
   Offset,
+  ProducerAppendOptions,
+  ProducerAppendResult,
+  ProducerState,
+  ProducerStateMap,
   PutOptions,
   PutResult,
   StreamMessage,

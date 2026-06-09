@@ -2,6 +2,7 @@ import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamNotFoundError } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
@@ -15,6 +16,7 @@ import type {
   GetResult,
   HeadResult,
   Offset,
+  ProducerStateMap,
   PutOptions,
   PutResult,
   StreamMessage,
@@ -40,6 +42,7 @@ type StoredStream = {
   data: Uint8Array;
   nextOffset: Offset;
   lastSeq: string | undefined;
+  producers: ProducerStateMap;
   appendCount: number;
   waiters: Waiter[];
 };
@@ -85,6 +88,7 @@ export class MemoryStore implements StreamStore {
       data,
       nextOffset,
       lastSeq: undefined,
+      producers: {},
       appendCount,
       waiters: [],
     };
@@ -101,18 +105,24 @@ export class MemoryStore implements StreamStore {
   ): Promise<AppendResult> {
     const stream = this.getStream(path);
     if (!stream) {
-      return Promise.reject(new StreamNotFoundError(path));
+      throw new StreamNotFoundError(path);
     }
 
-    try {
-      validateAppendContentType(
-        stream.metadata.contentType,
-        options?.contentType
-      );
-      validateAppendSeq(stream.lastSeq, options?.seq);
-    } catch (e) {
-      return Promise.reject(e);
+    validateAppendContentType(
+      stream.metadata.contentType,
+      options?.contentType
+    );
+    const producerDecision = evaluateProducerAppend(
+      stream.producers,
+      options?.producer
+    );
+    if (producerDecision._tag === "Duplicate") {
+      return Promise.resolve({
+        nextOffset: stream.nextOffset,
+        producer: producerDecision.result,
+      });
     }
+    validateAppendSeq(stream.lastSeq, options?.seq);
 
     const isJson = isJsonContentType(stream.metadata.contentType);
     const newData = mergeData(stream.data, data, isJson);
@@ -122,13 +132,19 @@ export class MemoryStore implements StreamStore {
     if (options?.seq !== undefined) {
       stream.lastSeq = options.seq;
     }
+    stream.producers = commitProducerAppend(stream.producers, producerDecision);
 
     stream.data = newData;
     stream.nextOffset = nextOffset;
 
     this.notifyWaiters(stream);
 
-    return Promise.resolve({ nextOffset });
+    return Promise.resolve({
+      nextOffset,
+      ...(producerDecision._tag === "Accepted"
+        ? { producer: producerDecision.result }
+        : {}),
+    });
   }
 
   get(path: string, options?: GetOptions): Promise<GetResult> {

@@ -1,17 +1,30 @@
-import type { Offset } from "durable-cf-streams";
+import type { AppendResult, Offset, StreamStore } from "durable-cf-streams";
 import {
+  CACHE_CONTROL_HEADER,
+  HEAD_CACHE_CONTROL_VALUE,
   isStreamError,
   isValidOffset,
   normalizeOffset,
+  PRODUCER_EPOCH_HEADER,
+  PRODUCER_EXPECTED_SEQ_HEADER,
+  PRODUCER_RECEIVED_SEQ_HEADER,
+  PRODUCER_SEQ_HEADER,
   PROTOCOL_SECURITY_HEADERS,
+  ProducerFencedError,
+  ProducerSequenceConflictError,
+  parseProducerHeaders,
   STREAM_EXPIRES_AT_HEADER,
+  STREAM_OFFSET_HEADER,
   STREAM_TTL_HEADER,
   streamErrorStatus,
+  TAIL_OFFSET_QUERY_VALUE,
   validateExpiresAt,
   validateTTL,
 } from "durable-cf-streams";
 
 export type AsyncQueue = <T>(operation: () => Promise<T>) => Promise<T>;
+
+export const LIVE_WAIT_TIMEOUT_MS = 20_000;
 
 export function createAsyncQueue(): AsyncQueue {
   let tail: Promise<unknown> = Promise.resolve();
@@ -116,14 +129,14 @@ export function parseLiveMode(
 }
 
 export type OffsetParseResult =
-  | { ok: true; offset: Offset | undefined }
+  | { ok: true; offset: Offset | undefined; isTail: boolean }
   | { ok: false; error: Response };
 
 export function parseOffsetParam(
   offsetParam: string | null
 ): OffsetParseResult {
   if (offsetParam === null) {
-    return { ok: true, offset: undefined };
+    return { ok: true, offset: undefined, isTail: false };
   }
   if (offsetParam === "") {
     return {
@@ -131,18 +144,83 @@ export function parseOffsetParam(
       error: new Response("Empty offset parameter", { status: 400 }),
     };
   }
+  if (offsetParam === TAIL_OFFSET_QUERY_VALUE) {
+    return { ok: true, offset: undefined, isTail: true };
+  }
   if (!isValidOffset(offsetParam)) {
     return {
       ok: false,
       error: new Response("Invalid offset format", { status: 400 }),
     };
   }
-  return { ok: true, offset: normalizeOffset(offsetParam) };
+  return { ok: true, offset: normalizeOffset(offsetParam), isTail: false };
+}
+
+export type ResolvedOffsetResult =
+  | { ok: true; offset: Offset | undefined; isTail: boolean }
+  | { ok: false; error: Response };
+
+export async function resolveReadOffset(
+  store: StreamStore,
+  path: string,
+  parsed: Extract<OffsetParseResult, { ok: true }>
+): Promise<ResolvedOffsetResult> {
+  if (!parsed.isTail) {
+    return parsed;
+  }
+
+  const head = await store.head(path);
+  if (!head) {
+    return {
+      ok: false,
+      error: new Response(`Stream not found: ${path}`, { status: 404 }),
+    };
+  }
+
+  return { ok: true, offset: head.nextOffset, isTail: true };
+}
+
+export function parseProducerOptions(request: Request) {
+  return parseProducerHeaders(request.headers);
+}
+
+export function appendResponse(result: AppendResult): Response {
+  const headers = new Headers({
+    [STREAM_OFFSET_HEADER]: result.nextOffset,
+  });
+
+  if (result.producer) {
+    headers.set(PRODUCER_EPOCH_HEADER, String(result.producer.epoch));
+    headers.set(PRODUCER_SEQ_HEADER, String(result.producer.seq));
+  }
+
+  return new Response(null, {
+    status: result.producer && !result.producer.duplicate ? 200 : 204,
+    headers,
+  });
+}
+
+export function tailOffsetCacheHeaders(isTail: boolean): HeadersInit {
+  return isTail ? { [CACHE_CONTROL_HEADER]: HEAD_CACHE_CONTROL_VALUE } : {};
 }
 
 export function mapError(error: unknown): Response {
   if (isStreamError(error)) {
-    return new Response(error.message, { status: streamErrorStatus(error) });
+    const headers = new Headers();
+
+    if (error instanceof ProducerSequenceConflictError) {
+      headers.set(PRODUCER_EXPECTED_SEQ_HEADER, error.expected);
+      headers.set(PRODUCER_RECEIVED_SEQ_HEADER, error.received);
+    }
+
+    if (error instanceof ProducerFencedError) {
+      headers.set(PRODUCER_EPOCH_HEADER, String(error.currentEpoch));
+    }
+
+    return new Response(error.message, {
+      headers,
+      status: streamErrorStatus(error),
+    });
   }
 
   if (

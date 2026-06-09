@@ -64,6 +64,45 @@ export class InvalidOffsetError extends Error {
   }
 }
 
+export class InvalidProducerError extends Error {
+  readonly _tag = "InvalidProducerError" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidProducerError";
+  }
+}
+
+export class ProducerSequenceConflictError extends Error {
+  readonly _tag = "ProducerSequenceConflictError" as const;
+  readonly expected: string;
+  readonly received: string;
+
+  constructor(expected: string, received: string) {
+    super(
+      `Producer sequence conflict: expected ${expected}, received ${received}`
+    );
+    this.name = "ProducerSequenceConflictError";
+    this.expected = expected;
+    this.received = received;
+  }
+}
+
+export class ProducerFencedError extends Error {
+  readonly _tag = "ProducerFencedError" as const;
+  readonly currentEpoch: number;
+  readonly receivedEpoch: number;
+
+  constructor(currentEpoch: number, receivedEpoch: number) {
+    super(
+      `Producer fenced: current epoch ${currentEpoch}, received ${receivedEpoch}`
+    );
+    this.name = "ProducerFencedError";
+    this.currentEpoch = currentEpoch;
+    this.receivedEpoch = receivedEpoch;
+  }
+}
+
 export class PayloadTooLargeError extends Error {
   readonly _tag = "PayloadTooLargeError" as const;
   readonly maxBytes: number;
@@ -86,6 +125,9 @@ export type StreamError =
   | ContentTypeMismatchError
   | InvalidJsonError
   | InvalidOffsetError
+  | InvalidProducerError
+  | ProducerSequenceConflictError
+  | ProducerFencedError
   | PayloadTooLargeError;
 
 const streamErrorTags = new Set<StreamError["_tag"]>([
@@ -95,6 +137,9 @@ const streamErrorTags = new Set<StreamError["_tag"]>([
   "ContentTypeMismatchError",
   "InvalidJsonError",
   "InvalidOffsetError",
+  "InvalidProducerError",
+  "ProducerSequenceConflictError",
+  "ProducerFencedError",
   "PayloadTooLargeError",
 ]);
 
@@ -111,9 +156,16 @@ export const streamErrorStatus = Match.type<StreamError>().pipe(
     "StreamConflictError",
     "SequenceConflictError",
     "ContentTypeMismatchError",
+    "ProducerSequenceConflictError",
     () => 409
   ),
-  Match.tag("InvalidJsonError", "InvalidOffsetError", () => 400),
+  Match.tag(
+    "InvalidJsonError",
+    "InvalidOffsetError",
+    "InvalidProducerError",
+    () => 400
+  ),
+  Match.tag("ProducerFencedError", () => 403),
   Match.tag("PayloadTooLargeError", () => 413),
   Match.exhaustive
 );

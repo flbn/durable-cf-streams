@@ -19,6 +19,20 @@ export type Cursor = Schema.Schema.Type<typeof CursorSchema>;
 export const ETagSchema = Schema.String.pipe(Schema.brand("ETag"));
 export type ETag = Schema.Schema.Type<typeof ETagSchema>;
 
+export const ProducerStateSchema = Schema.Struct({
+  epoch: Schema.Number,
+  seq: Schema.Number,
+});
+export type ProducerState = Schema.Schema.Type<typeof ProducerStateSchema>;
+
+export const ProducerStateMapSchema = Schema.Record({
+  key: Schema.String,
+  value: ProducerStateSchema,
+});
+export type ProducerStateMap = Schema.Schema.Type<
+  typeof ProducerStateMapSchema
+>;
+
 export const PersistedStreamMetadataSchema = Schema.Struct({
   contentType: Schema.String,
   ttlSeconds: Schema.optional(Schema.Number),
@@ -27,6 +41,7 @@ export const PersistedStreamMetadataSchema = Schema.Struct({
   nextOffset: OffsetSchema,
   lastSeq: Schema.optional(Schema.String),
   appendCount: Schema.Number,
+  producers: ProducerStateMapSchema,
 });
 
 export type PersistedStreamMetadata = Schema.Schema.Type<
@@ -39,4 +54,8 @@ export const decodePersistedStreamMetadata = Schema.decodeUnknownSync(
 
 export const decodePersistedStreamMetadataJson = Schema.decodeUnknownSync(
   Schema.parseJson(PersistedStreamMetadataSchema)
+);
+
+export const decodeProducerStateMapJson = Schema.decodeUnknownSync(
+  Schema.parseJson(ProducerStateMapSchema)
 );
