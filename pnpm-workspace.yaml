@@ -3,6 +3,10 @@ packages:
   - "examples/*"
 
 minimumReleaseAge: 10080 # 7 days
+frozenLockfile: true
+
+overrides:
+  "@durable-streams/client": 0.1.0
 
 catalog:
   "@durable-streams/server-conformance-tests": 0.1.4
