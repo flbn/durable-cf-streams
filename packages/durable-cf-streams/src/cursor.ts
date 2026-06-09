@@ -1,3 +1,6 @@
+import { CursorSchema } from "./schema.js";
+import type { Cursor } from "./types.js";
+
 export const DEFAULT_CURSOR_EPOCH: Date = new Date("2024-10-09T00:00:00.000Z");
 export const DEFAULT_CURSOR_INTERVAL_SECONDS = 20;
 
@@ -9,7 +12,7 @@ export type CursorOptions = {
   readonly epoch?: Date;
 };
 
-export const calculateCursor = (options: CursorOptions = {}): string => {
+export const calculateCursor = (options: CursorOptions = {}): Cursor => {
   const intervalSeconds =
     options.intervalSeconds ?? DEFAULT_CURSOR_INTERVAL_SECONDS;
   const epoch = options.epoch ?? DEFAULT_CURSOR_EPOCH;
@@ -19,7 +22,7 @@ export const calculateCursor = (options: CursorOptions = {}): string => {
   const intervalMs = intervalSeconds * 1000;
 
   const intervalNumber = Math.floor((now - epochMs) / intervalMs);
-  return String(intervalNumber);
+  return CursorSchema.make(String(intervalNumber));
 };
 
 const generateJitterIntervals = (intervalSeconds: number): number => {
@@ -32,7 +35,7 @@ const generateJitterIntervals = (intervalSeconds: number): number => {
 export const generateResponseCursor = (
   clientCursor: string | undefined,
   options: CursorOptions = {}
-): string => {
+): Cursor => {
   const intervalSeconds =
     options.intervalSeconds ?? DEFAULT_CURSOR_INTERVAL_SECONDS;
   const currentCursor = calculateCursor(options);
@@ -49,5 +52,5 @@ export const generateResponseCursor = (
   }
 
   const jitterIntervals = generateJitterIntervals(intervalSeconds);
-  return String(clientInterval + jitterIntervals);
+  return CursorSchema.make(String(clientInterval + jitterIntervals));
 };

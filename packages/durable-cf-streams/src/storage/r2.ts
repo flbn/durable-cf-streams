@@ -8,6 +8,10 @@ import {
   isExpired,
   isJsonContentType,
 } from "../protocol.js";
+import {
+  decodePersistedStreamMetadataJson,
+  type PersistedStreamMetadata,
+} from "../schema.js";
 import type {
   AppendOptions,
   AppendResult,
@@ -29,15 +33,7 @@ import {
   validateIdempotentCreate,
 } from "./utils.js";
 
-type R2StreamMetadata = {
-  contentType: string;
-  ttlSeconds?: number;
-  expiresAt?: string;
-  createdAt: number;
-  nextOffset: string;
-  lastSeq?: string;
-  appendCount: number;
-};
+type R2StreamMetadata = PersistedStreamMetadata;
 
 type Waiter = {
   deferred: Deferred.Deferred<WaitResult>;
@@ -67,8 +63,7 @@ export class R2Store implements StreamStore {
       return null;
     }
 
-    const text = await obj.text();
-    return JSON.parse(text) as R2StreamMetadata;
+    return decodePersistedStreamMetadataJson(await obj.text());
   }
 
   private async getData(path: string): Promise<Uint8Array> {

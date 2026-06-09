@@ -10,7 +10,7 @@ import {
   processJsonAppend,
   validateJsonCreate,
 } from "../protocol.js";
-import type { PutOptions } from "../types.js";
+import type { Offset, PutOptions } from "../types.js";
 
 export type IdempotentCreateInfo = {
   readonly contentType: string;
@@ -41,7 +41,7 @@ export const validateIdempotentCreate = (
 export type PreparedData = {
   readonly data: Uint8Array;
   readonly appendCount: number;
-  readonly nextOffset: string;
+  readonly nextOffset: Offset;
 };
 
 export const prepareInitialData = (options: PutOptions): PreparedData => {

@@ -8,6 +8,10 @@ import {
   isExpired,
   isJsonContentType,
 } from "../protocol.js";
+import {
+  decodePersistedStreamMetadata,
+  type PersistedStreamMetadata,
+} from "../schema.js";
 import type {
   AppendOptions,
   AppendResult,
@@ -29,15 +33,7 @@ import {
   validateIdempotentCreate,
 } from "./utils.js";
 
-type StreamRecord = {
-  contentType: string;
-  ttlSeconds?: number;
-  expiresAt?: string;
-  createdAt: number;
-  nextOffset: string;
-  lastSeq?: string;
-  appendCount: number;
-};
+type StreamRecord = PersistedStreamMetadata;
 
 type Waiter = {
   deferred: Deferred.Deferred<WaitResult>;
@@ -61,11 +57,13 @@ export class KVStore implements StreamStore {
     return `stream:${path}:data`;
   }
 
+  private async getMetadata(path: string): Promise<StreamRecord | null> {
+    const metadata = await this.kv.get(this.metaKey(path), "json");
+    return metadata === null ? null : decodePersistedStreamMetadata(metadata);
+  }
+
   async put(path: string, options: PutOptions): Promise<PutResult> {
-    const existingMeta = await this.kv.get<StreamRecord>(
-      this.metaKey(path),
-      "json"
-    );
+    const existingMeta = await this.getMetadata(path);
 
     if (existingMeta && !isExpired(existingMeta)) {
       validateIdempotentCreate(existingMeta, options);
@@ -105,7 +103,7 @@ export class KVStore implements StreamStore {
     data: Uint8Array,
     options?: AppendOptions
   ): Promise<AppendResult> {
-    const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
+    const meta = await this.getMetadata(path);
 
     if (!meta || isExpired(meta)) {
       throw new StreamNotFoundError(path);
@@ -143,7 +141,7 @@ export class KVStore implements StreamStore {
   }
 
   async get(path: string, options?: GetOptions): Promise<GetResult> {
-    const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
+    const meta = await this.getMetadata(path);
 
     if (!meta || isExpired(meta)) {
       this.streamCache.delete(path);
@@ -179,7 +177,7 @@ export class KVStore implements StreamStore {
   }
 
   async head(path: string): Promise<HeadResult | null> {
-    const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
+    const meta = await this.getMetadata(path);
 
     if (!meta || isExpired(meta)) {
       this.streamCache.delete(path);
@@ -220,7 +218,7 @@ export class KVStore implements StreamStore {
     offset: Offset,
     timeoutMs: number
   ): Promise<WaitResult> {
-    const meta = await this.kv.get<StreamRecord>(this.metaKey(path), "json");
+    const meta = await this.getMetadata(path);
 
     if (!meta || isExpired(meta)) {
       throw new StreamNotFoundError(path);

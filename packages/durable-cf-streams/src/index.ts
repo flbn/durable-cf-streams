@@ -28,11 +28,13 @@ export {
   ContentTypeMismatchError,
   InvalidJsonError,
   InvalidOffsetError,
+  isStreamError,
   PayloadTooLargeError,
   SequenceConflictError,
   StreamConflictError,
   type StreamError,
   StreamNotFoundError,
+  streamErrorStatus,
 } from "./errors.js";
 export {
   advanceOffset,
@@ -62,10 +64,13 @@ export {
   validateJsonCreate,
   validateTTL,
 } from "./protocol.js";
+export { CursorSchema, ETagSchema, OffsetSchema } from "./schema.js";
 export type { StreamStore } from "./storage/interface.js";
 export type {
   AppendOptions,
   AppendResult,
+  Cursor,
+  ETag,
   GetOptions,
   GetResult,
   HeadResult,

@@ -1,5 +1,6 @@
 import { InvalidJsonError } from "./errors.js";
-import type { Offset, StreamMetadata } from "./types.js";
+import { ETagSchema, OffsetSchema } from "./schema.js";
+import type { ETag, Offset, StreamMetadata } from "./types.js";
 
 export type ExpirationInfo = {
   readonly ttlSeconds?: number;
@@ -75,9 +76,9 @@ export const generateETag = (
   path: string,
   startOffset: Offset,
   endOffset: Offset
-): string => {
+): ETag => {
   const pathBase64 = btoa(path);
-  return `"${pathBase64}:${startOffset}:${endOffset}"`;
+  return ETagSchema.make(`"${pathBase64}:${startOffset}:${endOffset}"`);
 };
 
 export const parseETag = (
@@ -99,8 +100,8 @@ export const parseETag = (
   try {
     return {
       path: atob(pathBase64),
-      startOffset,
-      endOffset,
+      startOffset: OffsetSchema.make(startOffset),
+      endOffset: OffsetSchema.make(endOffset),
     };
   } catch {
     return null;

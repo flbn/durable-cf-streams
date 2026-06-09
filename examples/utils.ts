@@ -1,9 +1,12 @@
+import type { Offset } from "durable-cf-streams";
 import {
+  isStreamError,
   isValidOffset,
   normalizeOffset,
   PROTOCOL_SECURITY_HEADERS,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_TTL_HEADER,
+  streamErrorStatus,
   validateExpiresAt,
   validateTTL,
 } from "durable-cf-streams";
@@ -85,7 +88,7 @@ export type LiveModeResult =
 export function parseLiveMode(
   url: URL,
   request: Request,
-  offset: string | undefined
+  offset: Offset | undefined
 ): LiveModeResult {
   const liveParam = url.searchParams.get("live");
   const acceptHeader = request.headers.get("accept") ?? "";
@@ -113,7 +116,7 @@ export function parseLiveMode(
 }
 
 export type OffsetParseResult =
-  | { ok: true; offset: string | undefined }
+  | { ok: true; offset: Offset | undefined }
   | { ok: false; error: Response };
 
 export function parseOffsetParam(
@@ -138,31 +141,17 @@ export function parseOffsetParam(
 }
 
 export function mapError(error: unknown): Response {
-  if (error instanceof Error) {
-    const tag = (error as { _tag?: string })._tag;
-    switch (tag) {
-      case "StreamNotFoundError":
-        return new Response(error.message, { status: 404 });
-      case "SequenceConflictError":
-        return new Response(error.message, { status: 409 });
-      case "ContentTypeMismatchError":
-        return new Response(error.message, { status: 409 });
-      case "StreamConflictError":
-        return new Response(error.message, { status: 409 });
-      case "InvalidJsonError":
-        return new Response(error.message, { status: 400 });
-      case "PayloadTooLargeError":
-        return new Response(error.message, { status: 413 });
-      default:
-    }
+  if (isStreamError(error)) {
+    return new Response(error.message, { status: streamErrorStatus(error) });
+  }
 
-    if (
-      error.message.includes("too large") ||
+  if (
+    error instanceof Error &&
+    (error.message.includes("too large") ||
       error.message.includes("SQLITE_TOOBIG") ||
-      error.message.includes("row too big")
-    ) {
-      return new Response("Payload too large", { status: 413 });
-    }
+      error.message.includes("row too big"))
+  ) {
+    return new Response("Payload too large", { status: 413 });
   }
   console.error("Unexpected error:", error);
   return new Response("Internal Server Error", { status: 500 });

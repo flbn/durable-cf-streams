@@ -1,4 +1,4 @@
-import type { StreamStore } from "durable-cf-streams";
+import type { Offset, StreamStore } from "durable-cf-streams";
 import {
   CACHE_CONTROL_HEADER,
   calculateCursor,
@@ -206,13 +206,13 @@ export class StreamDO implements DurableObject {
       return liveMode.error;
     }
 
-    if (liveMode.mode === "sse") {
-      return this.handleSSE(path, offset as string, cursorParam ?? undefined);
+    if (liveMode.mode === "sse" && offset !== undefined) {
+      return this.handleSSE(path, offset, cursorParam ?? undefined);
     }
-    if (liveMode.mode === "long-poll") {
+    if (liveMode.mode === "long-poll" && offset !== undefined) {
       return await this.handleLongPoll(
         path,
-        offset as string,
+        offset,
         cursorParam ?? undefined,
         ifNoneMatch ?? undefined
       );
@@ -223,7 +223,7 @@ export class StreamDO implements DurableObject {
 
   private async handleSimpleGet(
     path: string,
-    offset: string | undefined,
+    offset: Offset | undefined,
     ifNoneMatch: string | null
   ): Promise<Response> {
     const result = await this.store.get(path, { offset });
@@ -256,7 +256,7 @@ export class StreamDO implements DurableObject {
 
   private handleSSE(
     path: string,
-    offset: string,
+    offset: Offset,
     clientCursor?: string
   ): Response {
     const state = { currentOffset: offset, cancelled: false };
@@ -283,7 +283,7 @@ export class StreamDO implements DurableObject {
 
   private async runSSELoop(
     path: string,
-    state: { currentOffset: string; cancelled: boolean },
+    state: { currentOffset: Offset; cancelled: boolean },
     clientCursor: string | undefined,
     controller: ReadableStreamDefaultController<Uint8Array>
   ): Promise<void> {
@@ -295,7 +295,7 @@ export class StreamDO implements DurableObject {
       );
     };
 
-    const sendControl = (nextOffset: string) => {
+    const sendControl = (nextOffset: Offset) => {
       const cursor = generateResponseCursor(clientCursor);
       send(
         "control",
@@ -333,8 +333,8 @@ export class StreamDO implements DurableObject {
 
   private async processSSEStream(
     path: string,
-    state: { currentOffset: string; cancelled: boolean },
-    sendControl: (offset: string) => void,
+    state: { currentOffset: Offset; cancelled: boolean },
+    sendControl: (offset: Offset) => void,
     sendData: (data: string, contentType: string) => void
   ): Promise<void> {
     if (!this.store.has(path)) {
@@ -379,7 +379,7 @@ export class StreamDO implements DurableObject {
 
   private async handleLongPoll(
     path: string,
-    offset: string,
+    offset: Offset,
     clientCursor?: string,
     ifNoneMatch?: string
   ): Promise<Response> {

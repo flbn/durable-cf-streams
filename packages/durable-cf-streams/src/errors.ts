@@ -1,3 +1,5 @@
+import { Match } from "effect";
+
 export class StreamNotFoundError extends Error {
   readonly _tag = "StreamNotFoundError" as const;
   readonly path: string;
@@ -85,3 +87,33 @@ export type StreamError =
   | InvalidJsonError
   | InvalidOffsetError
   | PayloadTooLargeError;
+
+const streamErrorTags = new Set<StreamError["_tag"]>([
+  "StreamNotFoundError",
+  "StreamConflictError",
+  "SequenceConflictError",
+  "ContentTypeMismatchError",
+  "InvalidJsonError",
+  "InvalidOffsetError",
+  "PayloadTooLargeError",
+]);
+
+export const isStreamError = (error: unknown): error is StreamError =>
+  error instanceof Error &&
+  typeof (error as { _tag?: unknown })._tag === "string" &&
+  streamErrorTags.has(
+    (error as { _tag?: unknown })._tag as StreamError["_tag"]
+  );
+
+export const streamErrorStatus = Match.type<StreamError>().pipe(
+  Match.tag("StreamNotFoundError", () => 404),
+  Match.tag(
+    "StreamConflictError",
+    "SequenceConflictError",
+    "ContentTypeMismatchError",
+    () => 409
+  ),
+  Match.tag("InvalidJsonError", "InvalidOffsetError", () => 400),
+  Match.tag("PayloadTooLargeError", () => 413),
+  Match.exhaustive
+);

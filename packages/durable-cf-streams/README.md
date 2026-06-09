@@ -94,6 +94,21 @@ import {
 } from "durable-cf-streams";
 ```
 
+## branded protocol types
+
+<!-- exported branded protocol schemas and types from packages/durable-cf-streams/src/schema.ts via packages/durable-cf-streams/src/index.ts -->
+
+```typescript
+import {
+  CursorSchema,
+  ETagSchema,
+  OffsetSchema,
+  type Cursor,
+  type ETag,
+  type Offset,
+} from "durable-cf-streams";
+```
+
 ## utilities
 
 <!-- exported utility functions from packages/durable-cf-streams/src/index.ts -->
@@ -127,17 +142,21 @@ import {
 
 ## errors
 
+<!-- exported error classes and helpers from packages/durable-cf-streams/src/errors.ts via packages/durable-cf-streams/src/index.ts -->
+
 tagged errors for pattern matching:
 
 ```typescript
 import {
-  StreamNotFoundError,
-  SequenceConflictError,
   ContentTypeMismatchError,
-  StreamConflictError,
   InvalidJsonError,
   InvalidOffsetError,
   PayloadTooLargeError,
+  SequenceConflictError,
+  StreamConflictError,
+  StreamNotFoundError,
+  isStreamError,
+  streamErrorStatus,
 } from "durable-cf-streams";
 
 // check error type
@@ -145,10 +164,9 @@ if (error instanceof StreamNotFoundError) {
   return new Response("not found", { status: 404 });
 }
 
-// or use _tag for switch
-switch (error._tag) {
-  case "StreamNotFoundError": return new Response("not found", { status: 404 });
-  case "SequenceConflictError": return new Response("conflict", { status: 409 });
+// or map any known stream error to its protocol status
+if (isStreamError(error)) {
+  return new Response(error.message, { status: streamErrorStatus(error) });
 }
 ```
 

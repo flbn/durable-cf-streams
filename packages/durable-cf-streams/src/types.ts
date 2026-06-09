@@ -1,4 +1,10 @@
-export type Offset = string;
+export type {
+  Cursor,
+  ETag,
+  Offset,
+} from "./schema.js";
+
+import type { Cursor, ETag, Offset } from "./schema.js";
 
 export type StreamMessage = {
   readonly offset: Offset;
@@ -43,15 +49,15 @@ export type GetResult = {
   readonly messages: StreamMessage[];
   readonly nextOffset: Offset;
   readonly upToDate: boolean;
-  readonly cursor: string;
-  readonly etag: string;
+  readonly cursor: Cursor;
+  readonly etag: ETag;
   readonly contentType: string;
 };
 
 export type HeadResult = {
   readonly contentType: string;
   readonly nextOffset: Offset;
-  readonly etag: string;
+  readonly etag: ETag;
 };
 
 export type WaitResult = {

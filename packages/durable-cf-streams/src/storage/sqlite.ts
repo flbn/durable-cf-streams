@@ -36,7 +36,7 @@ type StreamRow = {
   expires_at: string | null;
   created_at: number;
   data: ArrayBuffer;
-  next_offset: string;
+  next_offset: Offset;
   last_seq: string | null;
   append_count: number;
 };
