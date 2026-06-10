@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@durable-streams/server-conformance-tests':
-      specifier: 0.3.1
-      version: 0.3.1
+      specifier: 0.3.2
+      version: 0.3.2
     vitest:
       specifier: 4.1.8
       version: 4.1.8
@@ -42,7 +42,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -61,7 +61,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -80,7 +80,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -96,7 +96,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -112,7 +112,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -128,7 +128,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -144,7 +144,7 @@ importers:
     devDependencies:
       '@durable-streams/server-conformance-tests':
         specifier: 'catalog:'
-        version: 0.3.1(vite@7.3.0(yaml@2.9.0))
+        version: 0.3.2(vite@7.3.0(yaml@2.9.0))
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(vite@7.3.0(yaml@2.9.0))
@@ -290,8 +290,8 @@ packages:
     engines: {node: '>=18.0.0'}
     hasBin: true
 
-  '@durable-streams/server-conformance-tests@0.3.1':
-    resolution: {integrity: sha512-BKNN3/oKc3XZ4K8/U3KIbV4Sng8OeMxAvY0GUujuUBfxFJcxodonVYjJbdylDl2tyWY5K3/EcbdoTM3O9U6yhw==}
+  '@durable-streams/server-conformance-tests@0.3.2':
+    resolution: {integrity: sha512-TUcCVeNgOZswljLEVKI7SwtZ/kTUcSTR+ZnLtE2ACq50OQLgUSvU5cnI68y9kgXJmgUcQCaYRFRnPGt7A7dr+g==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -1695,7 +1695,7 @@ snapshots:
       '@microsoft/fetch-event-source': 2.0.1
       fastq: 1.20.1
 
-  '@durable-streams/server-conformance-tests@0.3.1(vite@7.3.0(yaml@2.9.0))':
+  '@durable-streams/server-conformance-tests@0.3.2(vite@7.3.0(yaml@2.9.0))':
     dependencies:
       '@durable-streams/client': 0.2.4
       fast-check: 4.5.2

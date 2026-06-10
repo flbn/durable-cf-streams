@@ -69,6 +69,7 @@ import {
   STREAM_CLOSED_HEADER,     // "Stream-Closed"
   STREAM_FORKED_FROM_HEADER, // "Stream-Forked-From"
   STREAM_FORK_OFFSET_HEADER, // "Stream-Fork-Offset"
+  RESERVED_CONTROL_PATH_SEGMENT, // "__ds"
   PRODUCER_ID_HEADER,       // "Producer-Id"
   PRODUCER_EPOCH_HEADER,    // "Producer-Epoch"
   PRODUCER_SEQ_HEADER,      // "Producer-Seq"

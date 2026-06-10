@@ -18,6 +18,7 @@ import { KVStore } from "durable-cf-streams/storage/kv";
 import {
   appendResponse,
   createAsyncQueue,
+  isReservedControlPath,
   isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
   mapError,
@@ -26,6 +27,7 @@ import {
   parsePutContentType,
   parseTtlAndExpires,
   pumpSSEStream,
+  reservedControlResponse,
   resolveReadRequest,
   type SSEDataEncoding,
   streamClosedHeaders,
@@ -61,6 +63,10 @@ export class StreamDO implements DurableObject {
     const path = url.pathname;
 
     try {
+      if (isReservedControlPath(path)) {
+        return withProtocolHeaders(reservedControlResponse());
+      }
+
       switch (request.method) {
         case "PUT":
           return withProtocolHeaders(await this.handlePut(path, request));

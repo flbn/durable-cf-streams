@@ -19,6 +19,7 @@ import { Hono } from "hono";
 import {
   appendResponse,
   createAsyncQueue,
+  isReservedControlPath,
   isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
   mapError,
@@ -27,6 +28,7 @@ import {
   parsePutContentType,
   parseTtlAndExpires,
   pumpSSEStream,
+  reservedControlResponse,
   resolveReadRequest,
   type SSEDataEncoding,
   streamClosedHeaders,
@@ -105,10 +107,13 @@ export class StreamDO implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     try {
+      const path = new URL(request.url).pathname;
+      if (isReservedControlPath(path)) {
+        return withProtocolHeaders(reservedControlResponse());
+      }
+
       if (request.method === "HEAD") {
-        return withProtocolHeaders(
-          await this.handleHead(new URL(request.url).pathname)
-        );
+        return withProtocolHeaders(await this.handleHead(path));
       }
 
       return withProtocolHeaders(await this.app.fetch(request));

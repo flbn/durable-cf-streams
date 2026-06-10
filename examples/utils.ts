@@ -16,6 +16,7 @@ import {
   ProducerFencedError,
   ProducerSequenceConflictError,
   parseProducerHeaders,
+  RESERVED_CONTROL_PATH_SEGMENT,
   STREAM_CLOSED_HEADER,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_FORK_OFFSET_HEADER,
@@ -33,6 +34,9 @@ export type AsyncQueue = <T>(operation: () => Promise<T>) => Promise<T>;
 export const LIVE_WAIT_TIMEOUT_MS = 20_000;
 
 export type SSEDataEncoding = "base64";
+
+const STREAM_ROOT_PATH = "/v1/stream";
+const RESERVED_CONTROL_PATH = `${STREAM_ROOT_PATH}/${RESERVED_CONTROL_PATH_SEGMENT}`;
 
 export function createAsyncQueue(): AsyncQueue {
   let tail: Promise<unknown> = Promise.resolve();
@@ -54,6 +58,19 @@ export function withProtocolHeaders(response: Response): Response {
     headers,
     status: response.status,
     statusText: response.statusText,
+  });
+}
+
+export function isReservedControlPath(path: string): boolean {
+  return (
+    path === RESERVED_CONTROL_PATH ||
+    path.startsWith(`${RESERVED_CONTROL_PATH}/`)
+  );
+}
+
+export function reservedControlResponse(): Response {
+  return new Response("Durable Streams control route not found", {
+    status: 404,
   });
 }
 

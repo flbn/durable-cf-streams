@@ -19,6 +19,7 @@ import { SqliteStore } from "durable-cf-streams/storage/sqlite";
 import {
   appendResponse,
   createAsyncQueue,
+  isReservedControlPath,
   isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
   mapError,
@@ -27,6 +28,7 @@ import {
   parsePutContentType,
   parseTtlAndExpires,
   pumpSSEStream,
+  reservedControlResponse,
   resolveReadRequest,
   type SSEDataEncoding,
   streamClosedHeaders,
@@ -64,6 +66,10 @@ export class StreamDO extends DurableObject<Env> {
     const path = url.pathname;
 
     try {
+      if (isReservedControlPath(path)) {
+        return withProtocolHeaders(reservedControlResponse());
+      }
+
       switch (request.method) {
         case "PUT":
           return withProtocolHeaders(await this.handlePut(path, request));

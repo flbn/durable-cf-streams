@@ -19,6 +19,7 @@ import { Router } from "itty-router";
 import {
   appendResponse,
   createAsyncQueue,
+  isReservedControlPath,
   isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
   mapError,
@@ -27,6 +28,7 @@ import {
   parsePutContentType,
   parseTtlAndExpires,
   pumpSSEStream,
+  reservedControlResponse,
   resolveReadRequest,
   type SSEDataEncoding,
   streamClosedHeaders,
@@ -102,6 +104,11 @@ export class StreamDO implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     try {
+      const path = new URL(request.url).pathname;
+      if (isReservedControlPath(path)) {
+        return withProtocolHeaders(reservedControlResponse());
+      }
+
       return withProtocolHeaders(await this.router.fetch(request));
     } catch (error) {
       return withProtocolHeaders(mapError(error));
