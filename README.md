@@ -8,7 +8,7 @@ pure building blocks for durable streams on cloudflare. no framework, no opinion
 
 ## examples
 
-each example passes the full 124-test conformance suite:
+each example tracks the full durable-streams conformance suite:
 
 - [`d1`](examples/d1) - d1 database backend
 - [`hono`](examples/hono) - hono router with memory store
@@ -61,6 +61,17 @@ pnpm run test
 ```
 
 note: protocol constants and utilities are implemented locally for cloudflare workers compatibility (no node.js dependencies).
+
+## conformance migration boundary
+
+<!-- migration boundary for durable-streams conformance bumps, package exports, and examples/utils.ts -->
+
+when a conformance bump needs new behavior, keep the line clear:
+
+- put protocol primitives in `durable-cf-streams`: constants, validators, serializers, parsers, offset/cursor helpers, error types, and storage semantics that are framework-neutral and useful to consumers.
+- keep http wiring in examples: routing, request parsing, mapping errors to `Response`, framework adapters, and small runtime coordination helpers needed by a particular storage backend or example.
+- if the same protocol detail appears in multiple examples and is easy to get subtly wrong, promote the pure part into the package before adding more example glue.
+- keep examples and package code current-protocol only: no legacy aliases, compatibility shims, or consumer data migrations.
 
 ## releasing
 

@@ -13,5 +13,5 @@ pnpm test
 
 - uses `SqliteStore` instead of `MemoryStore`
 - data persists across DO restarts
-- uses `new_sqlite_classes` in wrangler migration (not `new_classes`)
+- declares the Durable Object with `new_sqlite_classes` in `wrangler.toml`
 - extends `DurableObject` base class for proper typing

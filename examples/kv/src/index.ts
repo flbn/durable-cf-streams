@@ -1,19 +1,42 @@
-import type { StreamStore } from "durable-cf-streams";
+import type { Offset, StreamStore } from "durable-cf-streams";
 import {
+  CACHE_CONTROL_HEADER,
   calculateCursor,
+  encodeBase64Data,
+  encodeSSEData,
   generateResponseCursor,
+  HEAD_CACHE_CONTROL_VALUE,
   normalizeContentType,
+  SSE_CACHE_CONTROL_VALUE,
+  SSE_CLOSED_FIELD,
+  SSE_CURSOR_FIELD,
+  SSE_OFFSET_FIELD,
   STREAM_CURSOR_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
+  STREAM_SSE_DATA_ENCODING_HEADER,
   STREAM_UP_TO_DATE_HEADER,
 } from "durable-cf-streams";
 import { KVStore } from "durable-cf-streams/storage/kv";
 import {
+  appendResponse,
+  createAsyncQueue,
+  isReservedControlPath,
+  isStreamClosedRequest,
+  LIVE_WAIT_TIMEOUT_MS,
   mapError,
-  parseLiveMode,
-  parseOffsetParam,
+  parseForkOptions,
+  parseProducerOptions,
+  parsePutContentType,
   parseTtlAndExpires,
+  pumpSSEStream,
+  reservedControlResponse,
+  resolveReadRequest,
+  type SSEDataEncoding,
+  streamClosedHeaders,
+  streamMetadataHeaders,
+  tailOffsetCacheHeaders,
+  withProtocolHeaders,
 } from "../../utils.js";
 
 type Env = {
@@ -32,6 +55,7 @@ export default {
 
 export class StreamDO implements DurableObject {
   private readonly store: StreamStore;
+  private readonly appendQueue = createAsyncQueue();
 
   constructor(_state: DurableObjectState, env: Env) {
     this.store = new KVStore(env.KV);
@@ -42,89 +66,99 @@ export class StreamDO implements DurableObject {
     const path = url.pathname;
 
     try {
+      if (isReservedControlPath(path)) {
+        return withProtocolHeaders(reservedControlResponse());
+      }
+
       switch (request.method) {
         case "PUT":
-          return await this.handlePut(path, request);
+          return withProtocolHeaders(await this.handlePut(path, request));
         case "POST":
-          return await this.handlePost(path, request);
+          return withProtocolHeaders(await this.handlePost(path, request));
         case "GET":
-          return await this.handleGet(path, url, request);
+          return withProtocolHeaders(await this.handleGet(path, url, request));
         case "HEAD":
-          return await this.handleHead(path);
+          return withProtocolHeaders(await this.handleHead(path));
         case "DELETE":
-          return await this.handleDelete(path);
+          return withProtocolHeaders(await this.handleDelete(path));
         default:
-          return new Response("Method Not Allowed", { status: 405 });
+          return withProtocolHeaders(
+            new Response("Method Not Allowed", { status: 405 })
+          );
       }
     } catch (error) {
-      return mapError(error);
+      return withProtocolHeaders(mapError(error));
     }
   }
 
   private async handlePut(path: string, request: Request): Promise<Response> {
-    const contentType =
-      request.headers.get("content-type") ?? "application/octet-stream";
-
     const ttlResult = parseTtlAndExpires(request);
     if (!ttlResult.ok) {
       return ttlResult.error;
     }
     const { ttlSeconds, expiresAt } = ttlResult;
+    const forkResult = parseForkOptions(request);
+    if (!forkResult.ok) {
+      return forkResult.error;
+    }
+    const contentType = parsePutContentType(request, forkResult.forkedFrom);
 
     const body = await request.arrayBuffer();
     const data = new Uint8Array(body);
 
     const result = await this.store.put(path, {
-      contentType: normalizeContentType(contentType),
+      contentType,
       ttlSeconds,
       expiresAt,
       data: data.length > 0 ? data : undefined,
+      closed: isStreamClosedRequest(request),
+      forkedFrom: forkResult.forkedFrom,
+      forkOffset: forkResult.forkOffset,
+      forkSubOffset: forkResult.forkSubOffset,
     });
 
     const status = result.created ? 201 : 200;
     const headers: Record<string, string> = {
       [STREAM_OFFSET_HEADER]: result.nextOffset,
-      "Content-Type": normalizeContentType(contentType),
+      "Content-Type": result.contentType,
+      ...streamClosedHeaders(result.closed),
     };
     if (result.created) {
-      headers.Location = request.url.split("?")[0] ?? request.url;
+      headers.Location = request.url.split("?")[0];
     }
     return new Response(null, { status, headers });
   }
 
   private async handlePost(path: string, request: Request): Promise<Response> {
     const contentType = request.headers.get("content-type");
-    if (!contentType) {
+    const body = await request.arrayBuffer();
+    const data = new Uint8Array(body);
+    const close = isStreamClosedRequest(request);
+
+    if (data.length > 0 && !contentType) {
       return new Response("Content-Type header required", { status: 400 });
     }
 
-    if (!this.store.has(path)) {
-      return new Response(`Stream not found: ${path}`, { status: 404 });
-    }
-
-    const body = await request.arrayBuffer();
-    const data = new Uint8Array(body);
-
-    if (data.length === 0) {
+    if (data.length === 0 && !close) {
       return new Response("Empty body not allowed", { status: 400 });
     }
 
-    const seq =
-      request.headers.get(STREAM_SEQ_HEADER) ??
-      request.headers.get("x-seq") ??
-      undefined;
+    const seq = request.headers.get(STREAM_SEQ_HEADER) ?? undefined;
+    const producer = parseProducerOptions(request);
 
-    const result = await this.store.append(path, data, {
-      contentType: normalizeContentType(contentType),
-      seq,
-    });
+    const result = await this.appendQueue(() =>
+      this.store.append(path, data, {
+        contentType:
+          data.length > 0 && contentType
+            ? normalizeContentType(contentType)
+            : undefined,
+        close,
+        producer,
+        seq,
+      })
+    );
 
-    return new Response(null, {
-      status: 200,
-      headers: {
-        [STREAM_OFFSET_HEADER]: result.nextOffset,
-      },
-    });
+    return appendResponse(result);
   }
 
   private async handleGet(
@@ -135,36 +169,42 @@ export class StreamDO implements DurableObject {
     const cursorParam = url.searchParams.get("cursor");
     const ifNoneMatch = request.headers.get("if-none-match");
 
-    const offsetResult = parseOffsetParam(url.searchParams.get("offset"));
-    if (!offsetResult.ok) {
-      return offsetResult.error;
+    const readRequest = await resolveReadRequest(
+      this.store,
+      path,
+      url,
+      request
+    );
+    if (!readRequest.ok) {
+      return readRequest.error;
     }
-    const { offset } = offsetResult;
+    const { offset, isTail, liveMode } = readRequest;
 
-    const liveMode = parseLiveMode(url, request, offset);
-    if (liveMode.mode === "error") {
-      return liveMode.error;
+    if (liveMode.mode === "sse" && offset !== undefined) {
+      return this.handleSSE(
+        path,
+        offset,
+        cursorParam ?? undefined,
+        liveMode.encoding
+      );
     }
-
-    if (liveMode.mode === "sse") {
-      return this.handleSSE(path, offset as string, cursorParam ?? undefined);
-    }
-    if (liveMode.mode === "long-poll") {
+    if (liveMode.mode === "long-poll" && offset !== undefined) {
       return await this.handleLongPoll(
         path,
-        offset as string,
+        offset,
         cursorParam ?? undefined,
         ifNoneMatch ?? undefined
       );
     }
 
-    return await this.handleSimpleGet(path, offset, ifNoneMatch);
+    return await this.handleSimpleGet(path, offset, ifNoneMatch, isTail);
   }
 
   private async handleSimpleGet(
     path: string,
-    offset: string | undefined,
-    ifNoneMatch: string | null
+    offset: Offset | undefined,
+    ifNoneMatch: string | null,
+    isTailOffset: boolean
   ): Promise<Response> {
     const result = await this.store.get(path, { offset });
 
@@ -176,6 +216,8 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: result.nextOffset,
           [STREAM_CURSOR_HEADER]: result.cursor,
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(result.closed),
+          ...tailOffsetCacheHeaders(isTailOffset),
         },
       });
     }
@@ -190,20 +232,23 @@ export class StreamDO implements DurableObject {
         [STREAM_OFFSET_HEADER]: result.nextOffset,
         [STREAM_CURSOR_HEADER]: result.cursor,
         [STREAM_UP_TO_DATE_HEADER]: result.upToDate ? "true" : "false",
+        ...streamClosedHeaders(result.closed),
+        ...tailOffsetCacheHeaders(isTailOffset),
       },
     });
   }
 
   private handleSSE(
     path: string,
-    offset: string,
-    clientCursor?: string
+    offset: Offset,
+    clientCursor?: string,
+    encoding?: SSEDataEncoding
   ): Response {
     const state = { currentOffset: offset, cancelled: false };
 
     const stream = new ReadableStream({
       start: (controller) => {
-        this.runSSELoop(path, state, clientCursor, controller);
+        this.runSSELoop(path, state, clientCursor, encoding, controller);
       },
       cancel: () => {
         state.cancelled = true;
@@ -214,47 +259,58 @@ export class StreamDO implements DurableObject {
       status: 200,
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        [CACHE_CONTROL_HEADER]: SSE_CACHE_CONTROL_VALUE,
         Connection: "keep-alive",
         [STREAM_CURSOR_HEADER]: calculateCursor(),
+        ...(encoding === "base64"
+          ? { [STREAM_SSE_DATA_ENCODING_HEADER]: encoding }
+          : {}),
       },
     });
   }
 
   private async runSSELoop(
     path: string,
-    state: { currentOffset: string; cancelled: boolean },
+    state: { currentOffset: Offset; cancelled: boolean },
     clientCursor: string | undefined,
+    encoding: SSEDataEncoding | undefined,
     controller: ReadableStreamDefaultController<Uint8Array>
   ): Promise<void> {
     const encoder = new TextEncoder();
 
     const send = (event: string, data: string) => {
-      controller.enqueue(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
-    };
-
-    const sendControl = (nextOffset: string) => {
-      const cursor = generateResponseCursor(clientCursor);
-      send(
-        "control",
-        JSON.stringify({
-          streamCursor: cursor,
-          streamNextOffset: nextOffset,
-          upToDate: true,
-        })
+      controller.enqueue(
+        encoder.encode(`event: ${event}\n${encodeSSEData(data)}\n\n`)
       );
     };
 
-    const sendData = (data: string, contentType: string) => {
-      if (contentType.includes("json")) {
-        send("data", data);
-      } else {
-        const lines = data
-          .split("\n")
-          .map((line) => `data: ${line}`)
-          .join("\n");
-        controller.enqueue(encoder.encode(`event: data\n${lines}\n\n`));
-      }
+    const sendControl = (nextOffset: Offset, closed = false) => {
+      const cursor = generateResponseCursor(clientCursor);
+      send(
+        "control",
+        JSON.stringify(
+          closed
+            ? {
+                [SSE_OFFSET_FIELD]: nextOffset,
+                upToDate: true,
+                [SSE_CLOSED_FIELD]: true,
+              }
+            : {
+                [SSE_CURSOR_FIELD]: cursor,
+                [SSE_OFFSET_FIELD]: nextOffset,
+                upToDate: true,
+              }
+        )
+      );
+    };
+
+    const sendData = (data: Uint8Array, _contentType: string) => {
+      send(
+        "data",
+        encoding === "base64"
+          ? encodeBase64Data(data)
+          : new TextDecoder().decode(data)
+      );
     };
 
     const heartbeat = setInterval(() => {
@@ -279,60 +335,26 @@ export class StreamDO implements DurableObject {
 
   private async processSSEStream(
     path: string,
-    state: { currentOffset: string; cancelled: boolean },
-    sendControl: (offset: string) => void,
-    sendData: (data: string, contentType: string) => void
+    state: { currentOffset: Offset; cancelled: boolean },
+    sendControl: (offset: Offset, closed?: boolean) => void,
+    sendData: (data: Uint8Array, contentType: string) => void
   ): Promise<void> {
-    if (!this.store.has(path)) {
-      throw new Error("Stream not found");
-    }
-
-    const initial = await this.store.get(path, { offset: state.currentOffset });
-    if (initial.messages.length > 0) {
-      const body = this.store.formatResponse(path, initial.messages);
-      sendData(new TextDecoder().decode(body), initial.contentType);
-      state.currentOffset = initial.nextOffset;
-    }
-    sendControl(state.currentOffset);
-
-    while (!state.cancelled) {
-      if (!this.store.has(path)) {
-        throw new Error("Stream not found");
-      }
-
-      const wait = await this.store.waitForData(
-        path,
-        state.currentOffset,
-        30_000
-      );
-
-      if (wait.timedOut) {
-        sendControl(state.currentOffset);
-        continue;
-      }
-
-      if (wait.messages.length > 0) {
-        const result = await this.store.get(path, {
-          offset: state.currentOffset,
-        });
-        const body = this.store.formatResponse(path, result.messages);
-        sendData(new TextDecoder().decode(body), result.contentType);
-        state.currentOffset = result.nextOffset;
-        sendControl(state.currentOffset);
-      }
-    }
+    await pumpSSEStream(
+      this.store,
+      path,
+      state,
+      LIVE_WAIT_TIMEOUT_MS,
+      sendControl,
+      sendData
+    );
   }
 
   private async handleLongPoll(
     path: string,
-    offset: string,
+    offset: Offset,
     clientCursor?: string,
     ifNoneMatch?: string
   ): Promise<Response> {
-    if (!this.store.has(path)) {
-      return new Response(`Stream not found: ${path}`, { status: 404 });
-    }
-
     const initial = await this.store.get(path, { offset });
 
     if (initial.messages.length > 0) {
@@ -345,6 +367,7 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: initial.nextOffset,
           [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(initial.closed),
         },
       });
     }
@@ -357,28 +380,72 @@ export class StreamDO implements DurableObject {
           [STREAM_OFFSET_HEADER]: initial.nextOffset,
           [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(initial.closed),
         },
       });
     }
 
-    const wait = await this.store.waitForData(path, offset, 30_000);
+    if (initial.closed) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ETag: initial.etag,
+          [STREAM_OFFSET_HEADER]: initial.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(initial.closed),
+        },
+      });
+    }
+
+    const wait = await this.store.waitForData(
+      path,
+      offset,
+      LIVE_WAIT_TIMEOUT_MS
+    );
 
     if (wait.timedOut) {
       const current = await this.store.get(path, { offset });
-      const body = this.store.formatResponse(path, current.messages);
-      return new Response(body, {
-        status: 200,
+      if (current.messages.length > 0) {
+        const body = this.store.formatResponse(path, current.messages);
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": current.contentType,
+            ETag: current.etag,
+            [STREAM_OFFSET_HEADER]: current.nextOffset,
+            [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+            [STREAM_UP_TO_DATE_HEADER]: "true",
+            ...streamClosedHeaders(current.closed),
+          },
+        });
+      }
+
+      return new Response(null, {
+        status: 204,
         headers: {
-          "Content-Type": current.contentType,
           ETag: current.etag,
           [STREAM_OFFSET_HEADER]: current.nextOffset,
           [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
           [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(current.closed),
         },
       });
     }
 
     const result = await this.store.get(path, { offset });
+    if (result.messages.length === 0) {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ETag: result.etag,
+          [STREAM_OFFSET_HEADER]: result.nextOffset,
+          [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+          [STREAM_UP_TO_DATE_HEADER]: "true",
+          ...streamClosedHeaders(result.closed),
+        },
+      });
+    }
     const body = this.store.formatResponse(path, result.messages);
 
     return new Response(body, {
@@ -389,6 +456,7 @@ export class StreamDO implements DurableObject {
         [STREAM_OFFSET_HEADER]: result.nextOffset,
         [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
         [STREAM_UP_TO_DATE_HEADER]: "true",
+        ...streamClosedHeaders(result.closed),
       },
     });
   }
@@ -404,14 +472,17 @@ export class StreamDO implements DurableObject {
       status: 200,
       headers: {
         "Content-Type": result.contentType,
+        [CACHE_CONTROL_HEADER]: HEAD_CACHE_CONTROL_VALUE,
         ETag: result.etag,
         [STREAM_OFFSET_HEADER]: result.nextOffset,
+        ...streamMetadataHeaders(result),
       },
     });
   }
 
   private async handleDelete(path: string): Promise<Response> {
-    if (!this.store.has(path)) {
+    const head = await this.store.head(path);
+    if (!head) {
       return new Response(`Stream not found: ${path}`, { status: 404 });
     }
 

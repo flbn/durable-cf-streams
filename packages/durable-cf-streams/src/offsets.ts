@@ -1,3 +1,4 @@
+import { isOffsetString, OffsetSchema } from "./schema.js";
 import type { Offset } from "./types.js";
 
 export type ParsedOffset = {
@@ -5,8 +6,7 @@ export type ParsedOffset = {
   readonly pos: number;
 };
 
-const OFFSET_REGEX = /^[0-9a-f]{16}_[0-9a-f]{16}$/;
-const INITIAL_OFFSET = "0000000000000000_0000000000000000";
+const INITIAL_OFFSET = OffsetSchema.make("0000000000000000_0000000000000000");
 const SENTINEL_OFFSET = "-1";
 
 export const initialOffset = (): Offset => INITIAL_OFFSET;
@@ -15,13 +15,13 @@ export const isSentinelOffset = (offset: string): boolean =>
   offset === SENTINEL_OFFSET;
 
 export const isValidOffset = (offset: string): boolean =>
-  offset === SENTINEL_OFFSET || OFFSET_REGEX.test(offset);
+  offset === SENTINEL_OFFSET || isOffsetString(offset);
 
 export const normalizeOffset = (offset: string): Offset =>
-  offset === SENTINEL_OFFSET ? INITIAL_OFFSET : offset;
+  offset === SENTINEL_OFFSET ? INITIAL_OFFSET : OffsetSchema.make(offset);
 
 export const parseOffset = (offset: string): ParsedOffset | null => {
-  if (!OFFSET_REGEX.test(offset)) {
+  if (!isOffsetString(offset)) {
     return null;
   }
   const [seqHex, posHex] = offset.split("_") as [string, string];
@@ -34,7 +34,7 @@ export const parseOffset = (offset: string): ParsedOffset | null => {
 export const formatOffset = (seq: number, pos: number): Offset => {
   const seqHex = seq.toString(16).padStart(16, "0");
   const posHex = pos.toString(16).padStart(16, "0");
-  return `${seqHex}_${posHex}`;
+  return OffsetSchema.make(`${seqHex}_${posHex}`);
 };
 
 export const compareOffsets = (a: Offset, b: Offset): -1 | 0 | 1 => {

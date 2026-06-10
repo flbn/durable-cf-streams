@@ -1,7 +1,7 @@
-import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
-import { StreamNotFoundError } from "../errors.js";
-import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
+import { StreamConflictError, StreamNotFoundError } from "../errors.js";
+import { initialOffset, offsetToBytePos } from "../offsets.js";
+import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
@@ -15,6 +15,7 @@ import type {
   GetResult,
   HeadResult,
   Offset,
+  ProducerStateMap,
   PutOptions,
   PutResult,
   StreamMessage,
@@ -23,24 +24,34 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
-  mergeData,
+  appendResult,
+  assertStreamLive,
+  closedAppendResult,
+  inheritedExpiration,
+  normalizeForkSubOffset,
+  prepareAppendData,
+  prepareForkData,
   prepareInitialData,
+  resolveCreateContentType,
   validateAppendContentType,
   validateAppendSeq,
   validateIdempotentCreate,
 } from "./utils.js";
-
-type Waiter = {
-  deferred: Deferred.Deferred<WaitResult>;
-  offset: Offset;
-};
+import {
+  notifyDataWaiters,
+  notifyDeletedWaiters,
+  type Waiter,
+  waitForChange,
+} from "./waiters.js";
 
 type StoredStream = {
   metadata: StreamMetadata;
   data: Uint8Array;
   nextOffset: Offset;
   lastSeq: string | undefined;
+  producers: ProducerStateMap;
   appendCount: number;
+  closed: boolean;
   waiters: Waiter[];
 };
 
@@ -54,44 +65,159 @@ export class MemoryStore implements StreamStore {
     }
 
     if (isMetadataExpired(stream.metadata)) {
-      this.streams.delete(path);
-      return;
+      return this.expireStream(path, stream);
     }
 
     return stream;
+  }
+
+  private getLiveStream(path: string): StoredStream | undefined {
+    const stream = this.getStream(path);
+    if (!stream) {
+      return;
+    }
+    assertStreamLive(path, stream.metadata);
+    return stream;
+  }
+
+  private touchStream(path: string, stream: StoredStream): void {
+    if (stream.metadata.ttlSeconds === undefined) {
+      return;
+    }
+    stream.metadata = { ...stream.metadata, lastAccessedAt: Date.now() };
+    this.streams.set(path, stream);
+  }
+
+  private expireStream(
+    path: string,
+    stream: StoredStream
+  ): StoredStream | undefined {
+    if ((stream.metadata.childCount ?? 0) > 0) {
+      stream.metadata = { ...stream.metadata, deleted: true };
+      this.notifyDeleted(stream);
+      return stream;
+    }
+
+    this.hardDelete(path, stream);
+    return;
+  }
+
+  private hardDelete(path: string, stream: StoredStream): void {
+    this.notifyDeleted(stream);
+    this.streams.delete(path);
+    this.releaseParent(stream.metadata.forkedFrom);
+  }
+
+  private releaseParent(parentPath: string | undefined): void {
+    if (!parentPath) {
+      return;
+    }
+
+    const parent = this.streams.get(parentPath);
+    if (!parent) {
+      return;
+    }
+
+    const childCount = Math.max(0, (parent.metadata.childCount ?? 0) - 1);
+    parent.metadata = { ...parent.metadata, childCount };
+
+    if (parent.metadata.deleted === true && childCount === 0) {
+      this.hardDelete(parentPath, parent);
+    }
   }
 
   put(path: string, options: PutOptions): Promise<PutResult> {
     const existing = this.getStream(path);
 
     if (existing) {
+      if (existing.metadata.deleted === true) {
+        throw new StreamConflictError("stream is gone");
+      }
       validateIdempotentCreate(existing.metadata, options);
       return Promise.resolve({
         created: false,
         nextOffset: existing.nextOffset,
+        contentType: existing.metadata.contentType,
+        closed: existing.closed,
       });
     }
 
-    const { data, appendCount, nextOffset } = prepareInitialData(options);
+    let contentType = resolveCreateContentType(options);
+    let ttlSeconds = options.ttlSeconds;
+    let expiresAt = options.expiresAt;
+    let closed = options.closed === true;
+    let forkedFrom: string | undefined;
+    let forkOffset: Offset | undefined;
+    let forkSubOffset: number | undefined;
+    let prepared = prepareInitialData(options);
 
+    if (options.forkedFrom !== undefined) {
+      const source = this.getStream(options.forkedFrom);
+      if (!source) {
+        throw new StreamNotFoundError(options.forkedFrom);
+      }
+      if (source.metadata.deleted === true) {
+        throw new StreamConflictError("fork source is gone");
+      }
+      validateAppendContentType(
+        source.metadata.contentType,
+        options.contentType
+      );
+
+      forkedFrom = options.forkedFrom;
+      forkOffset = options.forkOffset ?? source.nextOffset;
+      forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
+      prepared = prepareForkData(
+        source.data,
+        forkOffset,
+        source.metadata.contentType,
+        forkSubOffset,
+        options.data
+      );
+      ({ ttlSeconds, expiresAt } = inheritedExpiration(
+        source.metadata,
+        options
+      ));
+      contentType = source.metadata.contentType;
+      closed = false;
+      source.metadata = {
+        ...source.metadata,
+        childCount: (source.metadata.childCount ?? 0) + 1,
+      };
+    }
+
+    const now = Date.now();
     const stream: StoredStream = {
       metadata: {
         path,
-        contentType: options.contentType,
-        ttlSeconds: options.ttlSeconds,
-        expiresAt: options.expiresAt,
-        createdAt: Date.now(),
+        contentType,
+        ttlSeconds,
+        expiresAt,
+        createdAt: now,
+        lastAccessedAt: now,
+        forkedFrom,
+        forkOffset,
+        forkSubOffset,
+        childCount: 0,
+        deleted: false,
       },
-      data,
-      nextOffset,
+      data: prepared.data,
+      nextOffset: prepared.nextOffset,
       lastSeq: undefined,
-      appendCount,
+      producers: {},
+      appendCount: prepared.appendCount,
+      closed,
       waiters: [],
     };
 
     this.streams.set(path, stream);
 
-    return Promise.resolve({ created: true, nextOffset });
+    return Promise.resolve({
+      created: true,
+      nextOffset: stream.nextOffset,
+      contentType: stream.metadata.contentType,
+      closed: stream.closed,
+    });
   }
 
   append(
@@ -99,43 +225,82 @@ export class MemoryStore implements StreamStore {
     data: Uint8Array,
     options?: AppendOptions
   ): Promise<AppendResult> {
-    const stream = this.getStream(path);
+    const stream = this.getLiveStream(path);
     if (!stream) {
-      return Promise.reject(new StreamNotFoundError(path));
+      throw new StreamNotFoundError(path);
     }
 
-    try {
+    const producerDecision = evaluateProducerAppend(
+      stream.producers,
+      options?.producer
+    );
+    const closedResult = closedAppendResult(
+      path,
+      stream.nextOffset,
+      stream.closed,
+      data,
+      options,
+      producerDecision
+    );
+    if (closedResult) {
+      this.touchStream(path, stream);
+      return Promise.resolve(closedResult);
+    }
+
+    if (data.length > 0) {
       validateAppendContentType(
         stream.metadata.contentType,
         options?.contentType
       );
-      validateAppendSeq(stream.lastSeq, options?.seq);
-    } catch (e) {
-      return Promise.reject(e);
     }
 
-    const isJson = isJsonContentType(stream.metadata.contentType);
-    const newData = mergeData(stream.data, data, isJson);
+    if (producerDecision._tag === "Duplicate") {
+      this.touchStream(path, stream);
+      return Promise.resolve({
+        nextOffset: stream.nextOffset,
+        producer: producerDecision.result,
+        closed: stream.closed,
+        appended: false,
+      });
+    }
+    validateAppendSeq(stream.lastSeq, options?.seq);
 
-    stream.appendCount++;
-    const nextOffset = formatOffset(stream.appendCount, newData.length);
+    const append = prepareAppendData(
+      stream.data,
+      data,
+      stream.metadata.contentType,
+      stream.appendCount,
+      stream.nextOffset
+    );
     if (options?.seq !== undefined) {
       stream.lastSeq = options.seq;
     }
+    stream.producers = commitProducerAppend(stream.producers, producerDecision);
 
-    stream.data = newData;
-    stream.nextOffset = nextOffset;
+    stream.data = append.data;
+    stream.appendCount = append.appendCount;
+    stream.nextOffset = append.nextOffset;
+    stream.closed = options?.close === true;
+    this.touchStream(path, stream);
 
     this.notifyWaiters(stream);
 
-    return Promise.resolve({ nextOffset });
+    return Promise.resolve(
+      appendResult(
+        stream.nextOffset,
+        stream.closed,
+        append.appended,
+        producerDecision
+      )
+    );
   }
 
   get(path: string, options?: GetOptions): Promise<GetResult> {
-    const stream = this.getStream(path);
+    const stream = this.getLiveStream(path);
     if (!stream) {
       return Promise.reject(new StreamNotFoundError(path));
     }
+    this.touchStream(path, stream);
 
     const startOffset = options?.offset ?? initialOffset();
     const byteOffset = offsetToBytePos(startOffset);
@@ -158,6 +323,9 @@ export class MemoryStore implements StreamStore {
       cursor: calculateCursor(),
       etag: generateETag(path, startOffset, stream.nextOffset),
       contentType: stream.metadata.contentType,
+      closed: stream.closed,
+      ttlSeconds: stream.metadata.ttlSeconds,
+      expiresAt: stream.metadata.expiresAt,
     });
   }
 
@@ -166,28 +334,39 @@ export class MemoryStore implements StreamStore {
     if (!stream) {
       return Promise.resolve(null);
     }
+    assertStreamLive(path, stream.metadata);
 
     return Promise.resolve({
       contentType: stream.metadata.contentType,
       nextOffset: stream.nextOffset,
       etag: generateETag(path, initialOffset(), stream.nextOffset),
+      closed: stream.closed,
+      ttlSeconds: stream.metadata.ttlSeconds,
+      expiresAt: stream.metadata.expiresAt,
     });
   }
 
   delete(path: string): Promise<void> {
-    const stream = this.streams.get(path);
-    if (stream) {
-      const effect = Effect.forEach(stream.waiters, (waiter) =>
-        Deferred.succeed(waiter.deferred, { messages: [], timedOut: false })
-      );
-      Effect.runSync(effect);
+    const stream = this.getStream(path);
+    if (!stream) {
+      return Promise.resolve();
     }
-    this.streams.delete(path);
+
+    assertStreamLive(path, stream.metadata);
+
+    if ((stream.metadata.childCount ?? 0) > 0) {
+      stream.metadata = { ...stream.metadata, deleted: true };
+      this.notifyDeleted(stream);
+      return Promise.resolve();
+    }
+
+    this.hardDelete(path, stream);
     return Promise.resolve();
   }
 
   has(path: string): boolean {
-    return this.getStream(path) !== undefined;
+    const stream = this.getStream(path);
+    return stream !== undefined && stream.metadata.deleted !== true;
   }
 
   waitForData(
@@ -195,10 +374,11 @@ export class MemoryStore implements StreamStore {
     offset: Offset,
     timeoutMs: number
   ): Promise<WaitResult> {
-    const stream = this.getStream(path);
+    const stream = this.getLiveStream(path);
     if (!stream) {
       return Promise.reject(new StreamNotFoundError(path));
     }
+    this.touchStream(path, stream);
 
     const byteOffset = offsetToBytePos(offset);
 
@@ -207,35 +387,27 @@ export class MemoryStore implements StreamStore {
       return Promise.resolve({
         messages: [{ offset, timestamp: Date.now(), data }],
         timedOut: false,
+        closed: stream.closed,
       });
     }
 
-    const effect = Effect.gen(this, function* () {
-      const deferred = yield* Deferred.make<WaitResult>();
-      const waiter: Waiter = { deferred, offset };
-      stream.waiters.push(waiter);
+    if (stream.closed) {
+      return Promise.resolve({ messages: [], timedOut: false, closed: true });
+    }
 
-      const timeout = Effect.as(
-        Effect.delay(
-          Effect.sync(() => {
-            // no op
-          }),
-          timeoutMs
-        ),
-        { messages: [], timedOut: true } as WaitResult
-      );
-
-      const result = yield* Effect.race(Deferred.await(deferred), timeout);
-
-      const index = stream.waiters.indexOf(waiter);
-      if (index !== -1) {
-        stream.waiters.splice(index, 1);
-      }
-
-      return result;
-    });
-
-    return Effect.runPromise(effect);
+    return waitForChange(
+      {
+        add: (waiter) => stream.waiters.push(waiter),
+        remove: (waiter) => {
+          const index = stream.waiters.indexOf(waiter);
+          if (index !== -1) {
+            stream.waiters.splice(index, 1);
+          }
+        },
+      },
+      offset,
+      timeoutMs
+    );
   }
 
   formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
@@ -265,21 +437,13 @@ export class MemoryStore implements StreamStore {
   private notifyWaiters(stream: StoredStream): void {
     const waiters = [...stream.waiters];
     stream.waiters = [];
+    notifyDataWaiters(waiters, stream.data, stream.closed, (waiter) =>
+      stream.waiters.push(waiter)
+    );
+  }
 
-    const effect = Effect.forEach(waiters, (waiter) => {
-      const byteOffset = offsetToBytePos(waiter.offset);
-
-      if (byteOffset < stream.data.length) {
-        const data = stream.data.slice(byteOffset);
-        return Deferred.succeed(waiter.deferred, {
-          messages: [{ offset: waiter.offset, timestamp: Date.now(), data }],
-          timedOut: false,
-        });
-      }
-      stream.waiters.push(waiter);
-      return Effect.void;
-    });
-
-    Effect.runSync(effect);
+  private notifyDeleted(stream: StoredStream): void {
+    notifyDeletedWaiters(stream.waiters);
+    stream.waiters = [];
   }
 }

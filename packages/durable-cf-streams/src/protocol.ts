@@ -1,10 +1,12 @@
 import { InvalidJsonError } from "./errors.js";
-import type { Offset, StreamMetadata } from "./types.js";
+import { ETagSchema, OffsetSchema } from "./schema.js";
+import type { ETag, Offset, StreamMetadata } from "./types.js";
 
 export type ExpirationInfo = {
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
   readonly createdAt?: number;
+  readonly lastAccessedAt?: number;
 };
 
 export const isExpired = (info: ExpirationInfo): boolean => {
@@ -17,8 +19,9 @@ export const isExpired = (info: ExpirationInfo): boolean => {
     }
   }
 
-  if (info.ttlSeconds !== undefined && info.createdAt !== undefined) {
-    const expiresAtMs = info.createdAt + info.ttlSeconds * 1000;
+  const ttlBase = info.lastAccessedAt ?? info.createdAt;
+  if (info.ttlSeconds !== undefined && ttlBase !== undefined) {
+    const expiresAtMs = ttlBase + info.ttlSeconds * 1000;
     if (now >= expiresAtMs) {
       return true;
     }
@@ -31,9 +34,11 @@ export const isMetadataExpired = (metadata: StreamMetadata): boolean =>
   isExpired(metadata);
 
 const TTL_REGEX = /^[1-9][0-9]*$/;
+const FORK_SUB_OFFSET_REGEX = /^(0|[1-9][0-9]*)$/;
 const EXPIRES_AT_REGEX =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const ETAG_REGEX = /^"([^:]+):([^:]+):([^"]+)"$/;
+const SSE_LINE_ENDING = /\r\n|\r|\n/;
 
 export const normalizeContentType = (contentType: string): string => {
   const semicolonIndex = contentType.indexOf(";");
@@ -48,12 +53,41 @@ export const isJsonContentType = (contentType: string): boolean => {
   return normalized === "application/json" || normalized.endsWith("+json");
 };
 
+export const isSSETextCompatibleContentType = (
+  contentType: string
+): boolean => {
+  const normalized = normalizeContentType(contentType);
+  return normalized.startsWith("text/") || isJsonContentType(normalized);
+};
+
+export const encodeSSEData = (data: string): string =>
+  data
+    .split(SSE_LINE_ENDING)
+    .map((line) => `data:${line}`)
+    .join("\n");
+
+export const encodeBase64Data = (data: Uint8Array): string => {
+  let binary = "";
+  for (let offset = 0; offset < data.length; offset += 0x80_00) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + 0x80_00));
+  }
+  return btoa(binary);
+};
+
 export const validateTTL = (ttl: string): number | null => {
   if (!TTL_REGEX.test(ttl)) {
     return null;
   }
   const parsed = Number.parseInt(ttl, 10);
   return Number.isNaN(parsed) || parsed <= 0 ? null : parsed;
+};
+
+export const validateForkSubOffset = (value: string): number | null => {
+  if (!FORK_SUB_OFFSET_REGEX.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 };
 
 export const validateExpiresAt = (value: string): Date | null => {
@@ -68,9 +102,9 @@ export const generateETag = (
   path: string,
   startOffset: Offset,
   endOffset: Offset
-): string => {
+): ETag => {
   const pathBase64 = btoa(path);
-  return `"${pathBase64}:${startOffset}:${endOffset}"`;
+  return ETagSchema.make(`"${pathBase64}:${startOffset}:${endOffset}"`);
 };
 
 export const parseETag = (
@@ -92,8 +126,8 @@ export const parseETag = (
   try {
     return {
       path: atob(pathBase64),
-      startOffset,
-      endOffset,
+      startOffset: OffsetSchema.make(startOffset),
+      endOffset: OffsetSchema.make(endOffset),
     };
   } catch {
     return null;

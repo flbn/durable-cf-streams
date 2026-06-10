@@ -52,6 +52,8 @@ interface StreamStore {
 
 ## protocol constants
 
+<!-- exported protocol constants from packages/durable-cf-streams/src/const.ts via packages/durable-cf-streams/src/index.ts -->
+
 compatible with the [durable streams protocol](https://github.com/durable-streams/durable-streams):
 
 ```typescript
@@ -63,13 +65,37 @@ import {
   STREAM_SEQ_HEADER,        // "Stream-Seq"
   STREAM_TTL_HEADER,        // "Stream-TTL"
   STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
+  STREAM_SSE_DATA_ENCODING_HEADER, // "Stream-SSE-Data-Encoding"
+  STREAM_CLOSED_HEADER,     // "Stream-Closed"
+  STREAM_FORKED_FROM_HEADER, // "Stream-Forked-From"
+  STREAM_FORK_OFFSET_HEADER, // "Stream-Fork-Offset"
+  STREAM_FORK_SUB_OFFSET_HEADER, // "Stream-Fork-Sub-Offset"
+  RESERVED_CONTROL_PATH_SEGMENT, // "__ds"
+  PRODUCER_ID_HEADER,       // "Producer-Id"
+  PRODUCER_EPOCH_HEADER,    // "Producer-Epoch"
+  PRODUCER_SEQ_HEADER,      // "Producer-Seq"
+  PRODUCER_EXPECTED_SEQ_HEADER, // "Producer-Expected-Seq"
+  PRODUCER_RECEIVED_SEQ_HEADER, // "Producer-Received-Seq"
+  CACHE_CONTROL_HEADER,     // "Cache-Control"
+  CONTENT_TYPE_OPTIONS_HEADER,        // "X-Content-Type-Options"
+  CROSS_ORIGIN_RESOURCE_POLICY_HEADER, // "Cross-Origin-Resource-Policy"
+
+  // response header values
+  PROTOCOL_SECURITY_HEADERS,
+  HEAD_CACHE_CONTROL_VALUE, // "no-store"
+  SSE_CACHE_CONTROL_VALUE,  // "no-cache"
+  DEFAULT_CONTENT_TYPE,     // "application/octet-stream"
 
   // query param constants
   OFFSET_QUERY_PARAM,       // "offset"
+  TAIL_OFFSET_QUERY_VALUE,  // "now"
   LIVE_QUERY_PARAM,         // "live"
   CURSOR_QUERY_PARAM,       // "cursor"
 
   // sse
+  SSE_OFFSET_FIELD, // "streamNextOffset"
+  SSE_CURSOR_FIELD, // "streamCursor"
+  SSE_CLOSED_FIELD, // "streamClosed"
   SSE_COMPATIBLE_CONTENT_TYPES,
 
   // path encoding
@@ -84,7 +110,28 @@ import {
 } from "durable-cf-streams";
 ```
 
+## branded protocol types
+
+<!-- exported branded protocol schemas and types from packages/durable-cf-streams/src/schema.ts via packages/durable-cf-streams/src/index.ts -->
+
+```typescript
+import {
+  CursorSchema,
+  ETagSchema,
+  OffsetSchema,
+  ProducerStateMapSchema,
+  ProducerStateSchema,
+  type Cursor,
+  type ETag,
+  type Offset,
+  type ProducerState,
+  type ProducerStateMap,
+} from "durable-cf-streams";
+```
+
 ## utilities
+
+<!-- exported utility functions from packages/durable-cf-streams/src/index.ts -->
 
 ```typescript
 import {
@@ -102,29 +149,48 @@ import {
   // protocol
   normalizeContentType,
   isJsonContentType,
+  isSSETextCompatibleContentType,
   validateTTL,
+  validateForkSubOffset,
   validateExpiresAt,
   generateETag,
   parseETag,
   processJsonAppend,
   formatJsonResponse,
   validateJsonCreate,
+  encodeSSEData,
+  encodeBase64Data,
+
+  // producer idempotency
+  parseProducerHeaders,
+  evaluateProducerAppend,
+  commitProducerAppend,
 } from "durable-cf-streams";
 ```
 
 ## errors
 
+<!-- exported error classes and helpers from packages/durable-cf-streams/src/errors.ts via packages/durable-cf-streams/src/index.ts -->
+
 tagged errors for pattern matching:
 
 ```typescript
 import {
-  StreamNotFoundError,
-  SequenceConflictError,
   ContentTypeMismatchError,
-  StreamConflictError,
   InvalidJsonError,
   InvalidOffsetError,
+  InvalidProducerError,
   PayloadTooLargeError,
+  ProducerFencedError,
+  ProducerSequenceConflictError,
+  SequenceConflictError,
+  StreamClosedError,
+  StreamConflictError,
+  StreamGoneError,
+  StreamNotFoundError,
+  isStreamError,
+  streamErrorHeaders,
+  streamErrorStatus,
 } from "durable-cf-streams";
 
 // check error type
@@ -132,10 +198,12 @@ if (error instanceof StreamNotFoundError) {
   return new Response("not found", { status: 404 });
 }
 
-// or use _tag for switch
-switch (error._tag) {
-  case "StreamNotFoundError": return new Response("not found", { status: 404 });
-  case "SequenceConflictError": return new Response("conflict", { status: 409 });
+// or map any known stream error to its protocol status
+if (isStreamError(error)) {
+  return new Response(error.message, {
+    headers: streamErrorHeaders(error),
+    status: streamErrorStatus(error),
+  });
 }
 ```
 
@@ -161,17 +229,20 @@ export class StreamDO extends DurableObject {
     const path = new URL(request.url).pathname;
 
     if (request.method === "PUT") {
-      const contentType = request.headers.get("content-type") ?? "application/octet-stream";
+      const contentType = request.headers.get("content-type");
       const body = new Uint8Array(await request.arrayBuffer());
       
       const result = await this.store.put(path, {
-        contentType: normalizeContentType(contentType),
+        contentType: contentType ? normalizeContentType(contentType) : undefined,
         data: body.length > 0 ? body : undefined,
       });
 
       return new Response(null, {
         status: result.created ? 201 : 200,
-        headers: { [STREAM_OFFSET_HEADER]: result.nextOffset },
+        headers: {
+          [STREAM_OFFSET_HEADER]: result.nextOffset,
+          "Content-Type": result.contentType,
+        },
       });
     }
 
