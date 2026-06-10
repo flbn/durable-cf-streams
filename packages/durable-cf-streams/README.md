@@ -92,6 +92,9 @@ import {
   CURSOR_QUERY_PARAM,       // "cursor"
 
   // sse
+  SSE_OFFSET_FIELD, // "streamNextOffset"
+  SSE_CURSOR_FIELD, // "streamCursor"
+  SSE_CLOSED_FIELD, // "streamClosed"
   SSE_COMPATIBLE_CONTENT_TYPES,
 
   // path encoding

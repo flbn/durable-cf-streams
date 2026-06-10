@@ -9,6 +9,9 @@ import {
   HEAD_CACHE_CONTROL_VALUE,
   normalizeContentType,
   SSE_CACHE_CONTROL_VALUE,
+  SSE_CLOSED_FIELD,
+  SSE_CURSOR_FIELD,
+  SSE_OFFSET_FIELD,
   STREAM_CURSOR_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
@@ -290,13 +293,13 @@ export class StreamDO extends DurableObject<Env> {
         JSON.stringify(
           closed
             ? {
-                streamNextOffset: nextOffset,
+                [SSE_OFFSET_FIELD]: nextOffset,
                 upToDate: true,
-                streamClosed: true,
+                [SSE_CLOSED_FIELD]: true,
               }
             : {
-                streamCursor: cursor,
-                streamNextOffset: nextOffset,
+                [SSE_CURSOR_FIELD]: cursor,
+                [SSE_OFFSET_FIELD]: nextOffset,
                 upToDate: true,
               }
         )
