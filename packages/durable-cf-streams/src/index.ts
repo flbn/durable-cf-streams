@@ -24,6 +24,7 @@ export {
   STREAM_CURSOR_HEADER,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_FORK_OFFSET_HEADER,
+  STREAM_FORK_SUB_OFFSET_HEADER,
   STREAM_FORKED_FROM_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
@@ -89,6 +90,7 @@ export {
   parseETag,
   processJsonAppend,
   validateExpiresAt,
+  validateForkSubOffset,
   validateJsonCreate,
   validateTTL,
 } from "./protocol.js";

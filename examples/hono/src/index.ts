@@ -148,6 +148,7 @@ export class StreamDO implements DurableObject {
       closed: isStreamClosedRequest(request),
       forkedFrom: forkResult.forkedFrom,
       forkOffset: forkResult.forkOffset,
+      forkSubOffset: forkResult.forkSubOffset,
     });
 
     const status = result.created ? 201 : 200;

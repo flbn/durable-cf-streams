@@ -8,6 +8,7 @@ export const STREAM_SSE_DATA_ENCODING_HEADER = "Stream-SSE-Data-Encoding";
 export const STREAM_CLOSED_HEADER = "Stream-Closed";
 export const STREAM_FORKED_FROM_HEADER = "Stream-Forked-From";
 export const STREAM_FORK_OFFSET_HEADER = "Stream-Fork-Offset";
+export const STREAM_FORK_SUB_OFFSET_HEADER = "Stream-Fork-Sub-Offset";
 export const RESERVED_CONTROL_PATH_SEGMENT = "__ds";
 export const SSE_OFFSET_FIELD = "streamNextOffset";
 export const SSE_CURSOR_FIELD = "streamCursor";

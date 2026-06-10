@@ -20,12 +20,14 @@ import {
   STREAM_CLOSED_HEADER,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_FORK_OFFSET_HEADER,
+  STREAM_FORK_SUB_OFFSET_HEADER,
   STREAM_FORKED_FROM_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_TTL_HEADER,
   streamErrorStatus,
   TAIL_OFFSET_QUERY_VALUE,
   validateExpiresAt,
+  validateForkSubOffset,
   validateTTL,
 } from "durable-cf-streams";
 
@@ -120,14 +122,61 @@ export function parseTtlAndExpires(request: Request): TtlExpiresResult {
 }
 
 export type ForkOptionsResult =
-  | { ok: true; forkedFrom?: string; forkOffset?: Offset }
+  | {
+      ok: true;
+      forkedFrom?: string;
+      forkOffset?: Offset;
+      forkSubOffset?: number;
+    }
   | { ok: false; error: Response };
+
+type ForkSubOffsetResult =
+  | { ok: true; forkSubOffset?: number }
+  | { ok: false; error: Response };
+
+const hasForkHeaders = (
+  forkedFrom: string | null,
+  forkOffset: string | null,
+  forkSubOffset: string | null
+): boolean =>
+  forkedFrom !== null || forkOffset !== null || forkSubOffset !== null;
+
+const parseForkSubOffsetHeader = (
+  value: string | null,
+  forkOffsetHeader: string | null
+): ForkSubOffsetResult => {
+  if (value === null) {
+    return { ok: true };
+  }
+
+  const parsed = validateForkSubOffset(value);
+  if (parsed === null) {
+    return {
+      ok: false,
+      error: new Response("Invalid fork sub-offset value", { status: 400 }),
+    };
+  }
+
+  if (parsed > 0 && forkOffsetHeader === null) {
+    return {
+      ok: false,
+      error: new Response("Fork offset required for sub-offset", {
+        status: 400,
+      }),
+    };
+  }
+
+  return { ok: true, forkSubOffset: parsed === 0 ? undefined : parsed };
+};
 
 export function parseForkOptions(request: Request): ForkOptionsResult {
   const forkedFrom = request.headers.get(STREAM_FORKED_FROM_HEADER);
   const forkOffsetHeader = request.headers.get(STREAM_FORK_OFFSET_HEADER);
+  const forkSubOffsetHeader = request.headers.get(
+    STREAM_FORK_SUB_OFFSET_HEADER
+  );
 
-  if (!(forkedFrom || forkOffsetHeader)) {
+  if (!hasForkHeaders(forkedFrom, forkOffsetHeader, forkSubOffsetHeader)) {
     return { ok: true };
   }
 
@@ -138,8 +187,20 @@ export function parseForkOptions(request: Request): ForkOptionsResult {
     };
   }
 
-  if (!forkOffsetHeader) {
-    return { ok: true, forkedFrom };
+  const forkSubOffsetResult = parseForkSubOffsetHeader(
+    forkSubOffsetHeader,
+    forkOffsetHeader
+  );
+  if (!forkSubOffsetResult.ok) {
+    return forkSubOffsetResult;
+  }
+
+  if (forkOffsetHeader === null) {
+    return {
+      ok: true,
+      forkedFrom,
+      forkSubOffset: forkSubOffsetResult.forkSubOffset,
+    };
   }
 
   if (!isValidOffset(forkOffsetHeader)) {
@@ -153,6 +214,7 @@ export function parseForkOptions(request: Request): ForkOptionsResult {
     ok: true,
     forkedFrom,
     forkOffset: normalizeOffset(forkOffsetHeader),
+    forkSubOffset: forkSubOffsetResult.forkSubOffset,
   };
 }
 

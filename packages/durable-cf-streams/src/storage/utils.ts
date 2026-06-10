@@ -29,6 +29,7 @@ export type IdempotentCreateInfo = {
   readonly closed?: boolean;
   readonly forkedFrom?: string;
   readonly forkOffset?: Offset;
+  readonly forkSubOffset?: number;
   readonly deleted?: boolean;
 };
 
@@ -122,6 +123,15 @@ const validateIdempotentForkCreate = (
   }
 
   if (
+    normalizeForkSubOffset(options.forkSubOffset) !==
+    normalizeForkSubOffset(existing.forkSubOffset)
+  ) {
+    throw new StreamConflictError(
+      "fork sub-offset mismatch on idempotent create"
+    );
+  }
+
+  if (
     options.ttlSeconds !== undefined &&
     options.ttlSeconds !== existing.ttlSeconds
   ) {
@@ -142,6 +152,20 @@ export type PreparedData = {
   readonly nextOffset: Offset;
 };
 
+export const normalizeForkSubOffset = (
+  forkSubOffset: number | undefined
+): number | undefined =>
+  forkSubOffset === undefined || forkSubOffset === 0
+    ? undefined
+    : forkSubOffset;
+
+const concatenateData = (left: Uint8Array, right: Uint8Array): Uint8Array => {
+  const result = new Uint8Array(left.length + right.length);
+  result.set(left);
+  result.set(right, left.length);
+  return result;
+};
+
 export const resolveCreateContentType = (options: PutOptions): string =>
   options.contentType ?? DEFAULT_CONTENT_TYPE;
 
@@ -159,9 +183,37 @@ export const prepareInitialData = (options: PutOptions): PreparedData => {
   return { data, appendCount, nextOffset };
 };
 
-export const prepareForkData = (
+const jsonSubOffsetByteLength = (
+  data: Uint8Array,
+  subOffset: number
+): number | null => {
+  if (subOffset === 0) {
+    return 0;
+  }
+
+  const text = new TextDecoder().decode(data);
+  const json = text.endsWith(",") ? text.slice(0, -1) : text;
+
+  try {
+    const items = JSON.parse(`[${json}]`) as unknown[];
+    if (subOffset > items.length) {
+      return null;
+    }
+    const prefix = `${items
+      .slice(0, subOffset)
+      .map((item) => JSON.stringify(item))
+      .join(",")},`;
+    return new TextEncoder().encode(prefix).length;
+  } catch {
+    return null;
+  }
+};
+
+const prepareForkPrefix = (
   sourceData: Uint8Array,
-  forkOffset: Offset
+  forkOffset: Offset,
+  contentType: string,
+  forkSubOffset: number | undefined
 ): PreparedData => {
   const byteOffset = offsetToBytePos(forkOffset);
   if (byteOffset > sourceData.length) {
@@ -169,10 +221,66 @@ export const prepareForkData = (
   }
 
   const parsedOffset = parseOffset(forkOffset);
+  const subOffset = normalizeForkSubOffset(forkSubOffset);
+  if (subOffset === undefined) {
+    return {
+      data: sourceData.slice(0, byteOffset),
+      appendCount: parsedOffset?.seq ?? 0,
+      nextOffset: forkOffset,
+    };
+  }
+
+  const isJson = isJsonContentType(contentType);
+  const subOffsetBytes = isJson
+    ? jsonSubOffsetByteLength(sourceData.slice(byteOffset), subOffset)
+    : subOffset;
+  if (
+    subOffsetBytes === null ||
+    byteOffset + subOffsetBytes > sourceData.length
+  ) {
+    throw new InvalidOffsetError(forkOffset);
+  }
+
+  const data = sourceData.slice(0, byteOffset + subOffsetBytes);
+  const appendCount = (parsedOffset?.seq ?? 0) + (isJson ? subOffset : 1);
   return {
-    data: sourceData.slice(0, byteOffset),
-    appendCount: parsedOffset?.seq ?? 0,
-    nextOffset: forkOffset,
+    data,
+    appendCount,
+    nextOffset: formatOffset(appendCount, data.length),
+  };
+};
+
+export const prepareForkData = (
+  sourceData: Uint8Array,
+  forkOffset: Offset,
+  contentType: string,
+  forkSubOffset?: number,
+  createData?: Uint8Array
+): PreparedData => {
+  const prepared = prepareForkPrefix(
+    sourceData,
+    forkOffset,
+    contentType,
+    forkSubOffset
+  );
+
+  if (createData === undefined || createData.length === 0) {
+    return prepared;
+  }
+
+  const data = isJsonContentType(contentType)
+    ? validateJsonCreate(createData, true)
+    : createData;
+  if (data.length === 0) {
+    return prepared;
+  }
+
+  const merged = concatenateData(prepared.data, data);
+  const appendCount = prepared.appendCount + 1;
+  return {
+    data: merged,
+    appendCount,
+    nextOffset: formatOffset(appendCount, merged.length),
   };
 };
 

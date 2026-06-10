@@ -34,6 +34,7 @@ export const isMetadataExpired = (metadata: StreamMetadata): boolean =>
   isExpired(metadata);
 
 const TTL_REGEX = /^[1-9][0-9]*$/;
+const FORK_SUB_OFFSET_REGEX = /^(0|[1-9][0-9]*)$/;
 const EXPIRES_AT_REGEX =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const ETAG_REGEX = /^"([^:]+):([^:]+):([^"]+)"$/;
@@ -79,6 +80,14 @@ export const validateTTL = (ttl: string): number | null => {
   }
   const parsed = Number.parseInt(ttl, 10);
   return Number.isNaN(parsed) || parsed <= 0 ? null : parsed;
+};
+
+export const validateForkSubOffset = (value: string): number | null => {
+  if (!FORK_SUB_OFFSET_REGEX.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 };
 
 export const validateExpiresAt = (value: string): Date | null => {

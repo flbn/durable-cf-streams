@@ -31,6 +31,7 @@ import {
   assertStreamLive,
   closedAppendResult,
   inheritedExpiration,
+  normalizeForkSubOffset,
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
@@ -170,6 +171,7 @@ export class KVStore implements StreamStore {
     let closed = options.closed === true;
     let forkedFrom: string | undefined;
     let forkOffset: Offset | undefined;
+    let forkSubOffset: number | undefined;
     let prepared = prepareInitialData(options);
 
     if (options.forkedFrom !== undefined) {
@@ -185,7 +187,14 @@ export class KVStore implements StreamStore {
       const sourceData = await this.getData(options.forkedFrom);
       forkedFrom = options.forkedFrom;
       forkOffset = options.forkOffset ?? source.nextOffset;
-      prepared = prepareForkData(sourceData, forkOffset);
+      forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
+      prepared = prepareForkData(
+        sourceData,
+        forkOffset,
+        source.contentType,
+        forkSubOffset,
+        options.data
+      );
       ({ ttlSeconds, expiresAt } = inheritedExpiration(source, options));
       contentType = source.contentType;
       closed = false;
@@ -209,6 +218,7 @@ export class KVStore implements StreamStore {
       closed,
       forkedFrom,
       forkOffset,
+      forkSubOffset,
       childCount: 0,
       deleted: false,
     };

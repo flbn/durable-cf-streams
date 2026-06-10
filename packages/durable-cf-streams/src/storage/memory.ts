@@ -29,6 +29,7 @@ import {
   assertStreamLive,
   closedAppendResult,
   inheritedExpiration,
+  normalizeForkSubOffset,
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
@@ -147,6 +148,7 @@ export class MemoryStore implements StreamStore {
     let closed = options.closed === true;
     let forkedFrom: string | undefined;
     let forkOffset: Offset | undefined;
+    let forkSubOffset: number | undefined;
     let prepared = prepareInitialData(options);
 
     if (options.forkedFrom !== undefined) {
@@ -164,7 +166,14 @@ export class MemoryStore implements StreamStore {
 
       forkedFrom = options.forkedFrom;
       forkOffset = options.forkOffset ?? source.nextOffset;
-      prepared = prepareForkData(source.data, forkOffset);
+      forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
+      prepared = prepareForkData(
+        source.data,
+        forkOffset,
+        source.metadata.contentType,
+        forkSubOffset,
+        options.data
+      );
       ({ ttlSeconds, expiresAt } = inheritedExpiration(
         source.metadata,
         options
@@ -188,6 +197,7 @@ export class MemoryStore implements StreamStore {
         lastAccessedAt: now,
         forkedFrom,
         forkOffset,
+        forkSubOffset,
         childCount: 0,
         deleted: false,
       },

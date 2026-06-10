@@ -28,6 +28,7 @@ import {
   assertStreamLive,
   closedAppendResult,
   inheritedExpiration,
+  normalizeForkSubOffset,
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
@@ -52,6 +53,7 @@ type StreamRow = {
   closed: number;
   forked_from: string | null;
   fork_offset: Offset | null;
+  fork_sub_offset: number | null;
   child_count: number;
   deleted: number;
 };
@@ -71,6 +73,7 @@ type PreparedCreate = {
   readonly closed: boolean;
   readonly forkedFrom?: string;
   readonly forkOffset?: Offset;
+  readonly forkSubOffset?: number;
 };
 
 const isRowExpired = (row: {
@@ -96,7 +99,7 @@ export class D1Store implements StreamStore {
   }
 
   static schema =
-    "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, last_accessed_at INTEGER, data BLOB NOT NULL DEFAULT x'', next_offset TEXT NOT NULL, last_seq TEXT, producers TEXT NOT NULL DEFAULT '{}', append_count INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0, forked_from TEXT, fork_offset TEXT, child_count INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);";
+    "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, last_accessed_at INTEGER, data BLOB NOT NULL DEFAULT x'', next_offset TEXT NOT NULL, last_seq TEXT, producers TEXT NOT NULL DEFAULT '{}', append_count INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0, forked_from TEXT, fork_offset TEXT, fork_sub_offset INTEGER, child_count INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);";
 
   async initialize(): Promise<void> {
     await this.db.exec(D1Store.schema);
@@ -126,6 +129,10 @@ export class D1Store implements StreamStore {
     await addColumn(
       "fork_offset",
       "ALTER TABLE streams ADD COLUMN fork_offset TEXT"
+    );
+    await addColumn(
+      "fork_sub_offset",
+      "ALTER TABLE streams ADD COLUMN fork_sub_offset INTEGER"
     );
     await addColumn(
       "child_count",
@@ -248,7 +255,14 @@ export class D1Store implements StreamStore {
     validateAppendContentType(source.content_type, options.contentType);
 
     const forkOffset = options.forkOffset ?? source.next_offset;
-    const prepared = prepareForkData(new Uint8Array(source.data), forkOffset);
+    const forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
+    const prepared = prepareForkData(
+      new Uint8Array(source.data),
+      forkOffset,
+      source.content_type,
+      forkSubOffset,
+      options.data
+    );
     const { ttlSeconds, expiresAt } = inheritedExpiration(
       {
         ttlSeconds: source.ttl_seconds ?? undefined,
@@ -270,6 +284,7 @@ export class D1Store implements StreamStore {
       closed: false,
       forkedFrom: sourcePath,
       forkOffset,
+      forkSubOffset,
     };
   }
 
@@ -289,6 +304,7 @@ export class D1Store implements StreamStore {
         closed: existing.closed === 1,
         forkedFrom: existing.forked_from ?? undefined,
         forkOffset: existing.fork_offset ?? undefined,
+        forkSubOffset: existing.fork_sub_offset ?? undefined,
       },
       options
     );
@@ -312,8 +328,8 @@ export class D1Store implements StreamStore {
     const now = Date.now();
     await this.db
       .prepare(`
-        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, child_count, deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .bind(
         path,
@@ -329,6 +345,7 @@ export class D1Store implements StreamStore {
         prepared.closed ? 1 : 0,
         prepared.forkedFrom ?? null,
         prepared.forkOffset ?? null,
+        prepared.forkSubOffset ?? null,
         0,
         0
       )

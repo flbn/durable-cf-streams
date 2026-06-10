@@ -24,6 +24,7 @@ export type StreamMetadata = {
   readonly closed?: boolean;
   readonly forkedFrom?: string;
   readonly forkOffset?: Offset;
+  readonly forkSubOffset?: number;
   readonly childCount?: number;
   readonly deleted?: boolean;
 };
@@ -36,6 +37,7 @@ export type PutOptions = {
   readonly closed?: boolean;
   readonly forkedFrom?: string;
   readonly forkOffset?: Offset;
+  readonly forkSubOffset?: number;
 };
 
 export type PutResult = {

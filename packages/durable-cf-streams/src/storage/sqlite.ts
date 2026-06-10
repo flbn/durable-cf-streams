@@ -28,6 +28,7 @@ import {
   assertStreamLive,
   closedAppendResult,
   inheritedExpiration,
+  normalizeForkSubOffset,
   prepareAppendData,
   prepareForkData,
   prepareInitialData,
@@ -52,6 +53,7 @@ type StreamRow = {
   closed: number;
   forked_from: string | null;
   fork_offset: Offset | null;
+  fork_sub_offset: number | null;
   child_count: number;
   deleted: number;
 };
@@ -71,6 +73,7 @@ type PreparedCreate = {
   readonly closed: boolean;
   readonly forkedFrom?: string;
   readonly forkOffset?: Offset;
+  readonly forkSubOffset?: number;
 };
 
 const isRowExpired = (row: {
@@ -107,6 +110,7 @@ export class SqliteStore implements StreamStore {
       closed INTEGER NOT NULL DEFAULT 0,
       forked_from TEXT,
       fork_offset TEXT,
+      fork_sub_offset INTEGER,
       child_count INTEGER NOT NULL DEFAULT 0,
       deleted INTEGER NOT NULL DEFAULT 0
     )
@@ -139,6 +143,10 @@ export class SqliteStore implements StreamStore {
     );
     addColumn("forked_from", "ALTER TABLE streams ADD COLUMN forked_from TEXT");
     addColumn("fork_offset", "ALTER TABLE streams ADD COLUMN fork_offset TEXT");
+    addColumn(
+      "fork_sub_offset",
+      "ALTER TABLE streams ADD COLUMN fork_sub_offset INTEGER"
+    );
     addColumn(
       "child_count",
       "ALTER TABLE streams ADD COLUMN child_count INTEGER NOT NULL DEFAULT 0"
@@ -253,7 +261,14 @@ export class SqliteStore implements StreamStore {
     validateAppendContentType(source.content_type, options.contentType);
 
     const forkOffset = options.forkOffset ?? source.next_offset;
-    const prepared = prepareForkData(new Uint8Array(source.data), forkOffset);
+    const forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
+    const prepared = prepareForkData(
+      new Uint8Array(source.data),
+      forkOffset,
+      source.content_type,
+      forkSubOffset,
+      options.data
+    );
     const { ttlSeconds, expiresAt } = inheritedExpiration(
       {
         ttlSeconds: source.ttl_seconds ?? undefined,
@@ -276,6 +291,7 @@ export class SqliteStore implements StreamStore {
       closed: false,
       forkedFrom: sourcePath,
       forkOffset,
+      forkSubOffset,
     };
   }
 
@@ -295,6 +311,7 @@ export class SqliteStore implements StreamStore {
         closed: existing.closed === 1,
         forkedFrom: existing.forked_from ?? undefined,
         forkOffset: existing.fork_offset ?? undefined,
+        forkSubOffset: existing.fork_sub_offset ?? undefined,
       },
       options
     );
@@ -317,8 +334,8 @@ export class SqliteStore implements StreamStore {
     const prepared = this.prepareCreate(options);
     const now = Date.now();
     this.sql.exec(
-      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, child_count, deleted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       path,
       prepared.contentType,
       prepared.ttlSeconds ?? null,
@@ -332,6 +349,7 @@ export class SqliteStore implements StreamStore {
       prepared.closed ? 1 : 0,
       prepared.forkedFrom ?? null,
       prepared.forkOffset ?? null,
+      prepared.forkSubOffset ?? null,
       0,
       0
     );
