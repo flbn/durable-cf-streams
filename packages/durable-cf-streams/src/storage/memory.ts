@@ -1,4 +1,3 @@
-import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamConflictError, StreamNotFoundError } from "../errors.js";
 import { initialOffset, offsetToBytePos } from "../offsets.js";
@@ -38,11 +37,12 @@ import {
   validateAppendSeq,
   validateIdempotentCreate,
 } from "./utils.js";
-
-type Waiter = {
-  deferred: Deferred.Deferred<WaitResult>;
-  offset: Offset;
-};
+import {
+  notifyDataWaiters,
+  notifyDeletedWaiters,
+  type Waiter,
+  waitForChange,
+} from "./waiters.js";
 
 type StoredStream = {
   metadata: StreamMetadata;
@@ -395,32 +395,19 @@ export class MemoryStore implements StreamStore {
       return Promise.resolve({ messages: [], timedOut: false, closed: true });
     }
 
-    const effect = Effect.gen(this, function* () {
-      const deferred = yield* Deferred.make<WaitResult>();
-      const waiter: Waiter = { deferred, offset };
-      stream.waiters.push(waiter);
-
-      const timeout = Effect.as(
-        Effect.delay(
-          Effect.sync(() => {
-            // no op
-          }),
-          timeoutMs
-        ),
-        { messages: [], timedOut: true } as WaitResult
-      );
-
-      const result = yield* Effect.race(Deferred.await(deferred), timeout);
-
-      const index = stream.waiters.indexOf(waiter);
-      if (index !== -1) {
-        stream.waiters.splice(index, 1);
-      }
-
-      return result;
-    });
-
-    return Effect.runPromise(effect);
+    return waitForChange(
+      {
+        add: (waiter) => stream.waiters.push(waiter),
+        remove: (waiter) => {
+          const index = stream.waiters.indexOf(waiter);
+          if (index !== -1) {
+            stream.waiters.splice(index, 1);
+          }
+        },
+      },
+      offset,
+      timeoutMs
+    );
   }
 
   formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
@@ -450,37 +437,13 @@ export class MemoryStore implements StreamStore {
   private notifyWaiters(stream: StoredStream): void {
     const waiters = [...stream.waiters];
     stream.waiters = [];
-
-    const effect = Effect.forEach(waiters, (waiter) => {
-      const byteOffset = offsetToBytePos(waiter.offset);
-
-      if (byteOffset < stream.data.length) {
-        const data = stream.data.slice(byteOffset);
-        return Deferred.succeed(waiter.deferred, {
-          messages: [{ offset: waiter.offset, timestamp: Date.now(), data }],
-          timedOut: false,
-          closed: stream.closed,
-        });
-      }
-      if (stream.closed) {
-        return Deferred.succeed(waiter.deferred, {
-          messages: [],
-          timedOut: false,
-          closed: true,
-        });
-      }
-      stream.waiters.push(waiter);
-      return Effect.void;
-    });
-
-    Effect.runSync(effect);
+    notifyDataWaiters(waiters, stream.data, stream.closed, (waiter) =>
+      stream.waiters.push(waiter)
+    );
   }
 
   private notifyDeleted(stream: StoredStream): void {
-    const effect = Effect.forEach(stream.waiters, (waiter) =>
-      Deferred.succeed(waiter.deferred, { messages: [], timedOut: false })
-    );
-    Effect.runSync(effect);
+    notifyDeletedWaiters(stream.waiters);
     stream.waiters = [];
   }
 }

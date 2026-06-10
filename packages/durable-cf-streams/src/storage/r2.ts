@@ -1,4 +1,3 @@
-import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
 import { StreamConflictError, StreamNotFoundError } from "../errors.js";
 import { initialOffset, offsetToBytePos } from "../offsets.js";
@@ -40,13 +39,14 @@ import {
   validateAppendSeq,
   validateIdempotentCreate,
 } from "./utils.js";
+import {
+  notifyDataWaiters,
+  notifyDeletedWaiters,
+  type Waiter,
+  waitForChange,
+} from "./waiters.js";
 
 type R2StreamMetadata = PersistedStreamMetadata;
-
-type Waiter = {
-  deferred: Deferred.Deferred<WaitResult>;
-  offset: Offset;
-};
 
 export class R2Store implements StreamStore {
   private readonly bucket: R2Bucket;
@@ -448,36 +448,24 @@ export class R2Store implements StreamStore {
       return { messages: [], timedOut: false, closed: true };
     }
 
-    const effect = Effect.gen(this, function* () {
-      const deferred = yield* Deferred.make<WaitResult>();
-      const waiter: Waiter = { deferred, offset };
-
-      const pathWaiters = this.waiters.get(path) ?? [];
-      pathWaiters.push(waiter);
-      this.waiters.set(path, pathWaiters);
-
-      const timeout = Effect.as(
-        Effect.delay(
-          Effect.sync(() => {
-            // no op
-          }),
-          timeoutMs
-        ),
-        { messages: [], timedOut: true } as WaitResult
-      );
-
-      const result = yield* Effect.race(Deferred.await(deferred), timeout);
-
-      const currentWaiters = this.waiters.get(path) ?? [];
-      const index = currentWaiters.indexOf(waiter);
-      if (index !== -1) {
-        currentWaiters.splice(index, 1);
-      }
-
-      return result;
-    });
-
-    return Effect.runPromise(effect);
+    return waitForChange(
+      {
+        add: (waiter) => {
+          const pathWaiters = this.waiters.get(path) ?? [];
+          pathWaiters.push(waiter);
+          this.waiters.set(path, pathWaiters);
+        },
+        remove: (waiter) => {
+          const currentWaiters = this.waiters.get(path) ?? [];
+          const index = currentWaiters.indexOf(waiter);
+          if (index !== -1) {
+            currentWaiters.splice(index, 1);
+          }
+        },
+      },
+      offset,
+      timeoutMs
+    );
   }
 
   formatResponse(path: string, messages: StreamMessage[]): Uint8Array {
@@ -507,45 +495,16 @@ export class R2Store implements StreamStore {
   private notifyWaiters(path: string, data: Uint8Array, closed = false): void {
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
-
-    const effect = Effect.forEach(waiters, (waiter) => {
-      const byteOffset = offsetToBytePos(waiter.offset);
-
-      if (byteOffset < data.length) {
-        return Deferred.succeed(waiter.deferred, {
-          messages: [
-            {
-              offset: waiter.offset,
-              timestamp: Date.now(),
-              data: data.slice(byteOffset),
-            },
-          ],
-          timedOut: false,
-          closed,
-        });
-      }
-      if (closed) {
-        return Deferred.succeed(waiter.deferred, {
-          messages: [],
-          timedOut: false,
-          closed: true,
-        });
-      }
+    notifyDataWaiters(waiters, data, closed, (waiter) => {
       const remaining = this.waiters.get(path) ?? [];
       remaining.push(waiter);
       this.waiters.set(path, remaining);
-      return Effect.void;
     });
-
-    Effect.runSync(effect);
   }
 
   private notifyDeleted(path: string): void {
     const waiters = this.waiters.get(path) ?? [];
-    const effect = Effect.forEach(waiters, (waiter) =>
-      Deferred.succeed(waiter.deferred, { messages: [], timedOut: false })
-    );
-    Effect.runSync(effect);
+    notifyDeletedWaiters(waiters);
 
     this.waiters.delete(path);
     this.streamCache.delete(path);
