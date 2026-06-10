@@ -11,6 +11,9 @@ allowBuilds:
   "workerd@1.20260601.1": true
 
 catalog:
-  "@durable-streams/server-conformance-tests": 0.3.4
+  "@durable-streams/server-conformance-tests": 0.3.5
   vitest: 4.1.8
   wrangler: 4.97.0
+
+minimumReleaseAgeExclude:
+  - '@durable-streams/server-conformance-tests@0.3.5'
