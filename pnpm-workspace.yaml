@@ -16,4 +16,4 @@ catalog:
   wrangler: 4.97.0
 
 minimumReleaseAgeExclude:
-  - '@durable-streams/server-conformance-tests@0.3.5'
+  - "@durable-streams/server-conformance-tests@0.3.5"
