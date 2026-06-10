@@ -1,4 +1,11 @@
 import { Match } from "effect";
+import {
+  PRODUCER_EPOCH_HEADER,
+  PRODUCER_EXPECTED_SEQ_HEADER,
+  PRODUCER_RECEIVED_SEQ_HEADER,
+  STREAM_CLOSED_HEADER,
+  STREAM_OFFSET_HEADER,
+} from "./const.js";
 
 export class StreamNotFoundError extends Error {
   readonly _tag = "StreamNotFoundError" as const;
@@ -197,5 +204,34 @@ export const streamErrorStatus = Match.type<StreamError>().pipe(
   ),
   Match.tag("ProducerFencedError", () => 403),
   Match.tag("PayloadTooLargeError", () => 413),
+  Match.exhaustive
+);
+
+export const streamErrorHeaders: (
+  error: StreamError
+) => Record<string, string> = Match.type<StreamError>().pipe(
+  Match.tag("StreamClosedError", (error) => ({
+    [STREAM_CLOSED_HEADER]: "true",
+    [STREAM_OFFSET_HEADER]: error.nextOffset,
+  })),
+  Match.tag("ProducerSequenceConflictError", (error) => ({
+    [PRODUCER_EXPECTED_SEQ_HEADER]: error.expected,
+    [PRODUCER_RECEIVED_SEQ_HEADER]: error.received,
+  })),
+  Match.tag("ProducerFencedError", (error) => ({
+    [PRODUCER_EPOCH_HEADER]: String(error.currentEpoch),
+  })),
+  Match.tag(
+    "StreamNotFoundError",
+    "StreamGoneError",
+    "StreamConflictError",
+    "SequenceConflictError",
+    "ContentTypeMismatchError",
+    "InvalidJsonError",
+    "InvalidOffsetError",
+    "InvalidProducerError",
+    "PayloadTooLargeError",
+    () => ({})
+  ),
   Match.exhaustive
 );

@@ -189,6 +189,7 @@ import {
   StreamGoneError,
   StreamNotFoundError,
   isStreamError,
+  streamErrorHeaders,
   streamErrorStatus,
 } from "durable-cf-streams";
 
@@ -199,7 +200,10 @@ if (error instanceof StreamNotFoundError) {
 
 // or map any known stream error to its protocol status
 if (isStreamError(error)) {
-  return new Response(error.message, { status: streamErrorStatus(error) });
+  return new Response(error.message, {
+    headers: streamErrorHeaders(error),
+    status: streamErrorStatus(error),
+  });
 }
 ```
 

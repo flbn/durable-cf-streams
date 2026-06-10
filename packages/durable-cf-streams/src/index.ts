@@ -55,6 +55,7 @@ export {
   type StreamError,
   StreamGoneError,
   StreamNotFoundError,
+  streamErrorHeaders,
   streamErrorStatus,
 } from "./errors.js";
 export {

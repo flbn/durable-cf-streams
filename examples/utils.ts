@@ -9,12 +9,8 @@ import {
   normalizeContentType,
   normalizeOffset,
   PRODUCER_EPOCH_HEADER,
-  PRODUCER_EXPECTED_SEQ_HEADER,
-  PRODUCER_RECEIVED_SEQ_HEADER,
   PRODUCER_SEQ_HEADER,
   PROTOCOL_SECURITY_HEADERS,
-  ProducerFencedError,
-  ProducerSequenceConflictError,
   parseProducerHeaders,
   RESERVED_CONTROL_PATH_SEGMENT,
   STREAM_CLOSED_HEADER,
@@ -24,6 +20,7 @@ import {
   STREAM_FORKED_FROM_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_TTL_HEADER,
+  streamErrorHeaders,
   streamErrorStatus,
   TAIL_OFFSET_QUERY_VALUE,
   validateExpiresAt,
@@ -525,24 +522,8 @@ export function tailOffsetCacheHeaders(isTail: boolean): HeadersInit {
 
 export function mapError(error: unknown): Response {
   if (isStreamError(error)) {
-    const headers = new Headers();
-
-    if (error._tag === "StreamClosedError") {
-      headers.set(STREAM_CLOSED_HEADER, "true");
-      headers.set(STREAM_OFFSET_HEADER, error.nextOffset);
-    }
-
-    if (error instanceof ProducerSequenceConflictError) {
-      headers.set(PRODUCER_EXPECTED_SEQ_HEADER, error.expected);
-      headers.set(PRODUCER_RECEIVED_SEQ_HEADER, error.received);
-    }
-
-    if (error instanceof ProducerFencedError) {
-      headers.set(PRODUCER_EPOCH_HEADER, String(error.currentEpoch));
-    }
-
     return new Response(error.message, {
-      headers,
+      headers: streamErrorHeaders(error),
       status: streamErrorStatus(error),
     });
   }
