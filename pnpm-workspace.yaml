@@ -13,7 +13,7 @@ allowBuilds:
 catalog:
   "@durable-streams/server-conformance-tests": 0.3.5
   vitest: 4.1.8
-  wrangler: 4.97.0
+  wrangler: 4.98.0
 
 minimumReleaseAgeExclude:
   - "@durable-streams/server-conformance-tests@0.3.5"
