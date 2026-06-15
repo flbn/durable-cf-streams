@@ -64,8 +64,6 @@ note: protocol constants and utilities are implemented locally for cloudflare wo
 
 ## conformance migration boundary
 
-<!-- migration boundary for durable-streams conformance bumps, package exports, and examples/utils.ts -->
-
 when a conformance bump needs new behavior, keep the line clear:
 
 - put protocol primitives in `durable-cf-streams`: constants, validators, serializers, parsers, offset/cursor helpers, error types, and storage semantics that are framework-neutral and useful to consumers.
@@ -74,8 +72,6 @@ when a conformance bump needs new behavior, keep the line clear:
 - keep examples and package code current-protocol only: no legacy aliases, compatibility shims, or consumer data migrations.
 
 ## releasing
-
-<!-- release workflow behavior from .github/workflows/release.yml, release-please-config.json, and .release-please-manifest.json -->
 
 release-please automatically creates a package release PR when you merge releasable changes to main. the manifest starts from the current `packages/durable-cf-streams` version and uses the bootstrap sha in `release-please-config.json` to bridge the old release history.
 
