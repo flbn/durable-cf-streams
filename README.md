@@ -75,11 +75,13 @@ when a conformance bump needs new behavior, keep the line clear:
 
 ## releasing
 
-release-please automatically creates a release PR when you merge to main. by default it bumps patch version based on conventional commits.
+<!-- release workflow behavior from .github/workflows/release.yml, release-please-config.json, and .release-please-manifest.json -->
+
+release-please automatically creates a package release PR when you merge releasable changes to main. the manifest starts from the current `packages/durable-cf-streams` version and uses the bootstrap sha in `release-please-config.json` to bridge the old release history.
 
 to override the version, edit the version in `packages/durable-cf-streams/package.json` directly in the release PR before merging.
 
-when the release PR is merged, release-please creates a github release which triggers npm publish.
+when the release PR is merged, release-please creates the github release and the same workflow publishes `packages/durable-cf-streams` to npm with provenance.
 
 ## license
 

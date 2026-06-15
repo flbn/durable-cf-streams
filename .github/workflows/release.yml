@@ -3,30 +3,36 @@ name: release
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release-please:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          release-type: node
-          package-name: durable-cf-streams
-          path: packages/durable-cf-streams
-          changelog-path: CHANGELOG.md
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   publish:
-    if: github.event_name == 'release'
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: npm
     permissions:
       contents: read
