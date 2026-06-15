@@ -6,9 +6,11 @@ minimumReleaseAge: 10080 # 7 days
 preferFrozenLockfile: true
 
 allowBuilds:
-  "esbuild@0.27.2 || 0.27.3": true
+  "esbuild@0.27.2": true
+  "esbuild@0.27.3": true
+  "esbuild@0.27.7": true
   "sharp@0.34.5": true
-  "workerd@1.20260601.1": true
+  "workerd@1.20260603.1": true
 
 catalog:
   "@durable-streams/server-conformance-tests": 0.3.5
