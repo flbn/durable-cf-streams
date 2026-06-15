@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/flbn/durable-cf-streams/compare/v0.2.0...v0.3.0) (2026-06-15)
+
+
+### Features
+
+* 0.3.5 ([#28](https://github.com/flbn/durable-cf-streams/issues/28)) ([849d8af](https://github.com/flbn/durable-cf-streams/commit/849d8afec2b098b70070670c76e2768277d261ac))
+
+
+### Bug Fixes
+
+* ci + sse failures for tests ([1bd62fc](https://github.com/flbn/durable-cf-streams/commit/1bd62fc6e3c45d939a50912ab14f2f2c48236b29))
+* ci + sse failures for tests ([#32](https://github.com/flbn/durable-cf-streams/issues/32)) ([1bd62fc](https://github.com/flbn/durable-cf-streams/commit/1bd62fc6e3c45d939a50912ab14f2f2c48236b29))
+
 ## [0.2.0](https://github.com/flbn/durable-cf-streams/compare/v0.1.41...v0.2.0) (2026-06-15)
 
 
