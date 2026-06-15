@@ -3,7 +3,6 @@ import {
   CACHE_CONTROL_HEADER,
   calculateCursor,
   encodeBase64Data,
-  encodeSSEData,
   generateResponseCursor,
   HEAD_CACHE_CONTROL_VALUE,
   normalizeContentType,
@@ -21,6 +20,7 @@ import { D1Store } from "durable-cf-streams/storage/d1";
 import {
   appendResponse,
   createAsyncQueue,
+  createSSEWriter,
   isReservedControlPath,
   isStreamClosedRequest,
   LIVE_WAIT_TIMEOUT_MS,
@@ -285,17 +285,11 @@ export class StreamDO implements DurableObject {
     encoding: SSEDataEncoding | undefined,
     controller: ReadableStreamDefaultController<Uint8Array>
   ): Promise<void> {
-    const encoder = new TextEncoder();
-
-    const send = (event: string, data: string) => {
-      controller.enqueue(
-        encoder.encode(`event: ${event}\n${encodeSSEData(data)}\n\n`)
-      );
-    };
+    const sse = createSSEWriter(controller);
 
     const sendControl = (nextOffset: Offset, closed = false) => {
       const cursor = generateResponseCursor(clientCursor);
-      send(
+      sse.send(
         "control",
         JSON.stringify(
           closed
@@ -314,7 +308,7 @@ export class StreamDO implements DurableObject {
     };
 
     const sendData = (data: Uint8Array, _contentType: string) => {
-      send(
+      sse.send(
         "data",
         encoding === "base64"
           ? encodeBase64Data(data)
@@ -324,7 +318,7 @@ export class StreamDO implements DurableObject {
 
     const heartbeat = setInterval(() => {
       if (!state.cancelled) {
-        controller.enqueue(encoder.encode(": heartbeat\n\n"));
+        sse.comment("heartbeat");
       }
     }, 15_000);
 
@@ -334,10 +328,11 @@ export class StreamDO implements DurableObject {
       if (!state.cancelled) {
         const message =
           error instanceof Error ? error.message : "Unknown error";
-        send("error", JSON.stringify({ error: message }));
+        sse.send("error", JSON.stringify({ error: message }));
       }
     } finally {
       clearInterval(heartbeat);
+      sse.flush();
       controller.close();
     }
   }

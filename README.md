@@ -73,7 +73,7 @@ when a conformance bump needs new behavior, keep the line clear:
 
 ## releasing
 
-release-please automatically creates a package release PR when you merge releasable changes to main. the manifest starts from the current `packages/durable-cf-streams` version and uses the bootstrap sha in `release-please-config.json` to bridge the old release history.
+release-please automatically creates a package release PR when you merge releasable changes to main. the manifest starts from the current `packages/durable-cf-streams` version, writes the package changelog in `packages/durable-cf-streams/CHANGELOG.md`, and uses the bootstrap sha in `release-please-config.json` to bridge the old release history.
 
 to override the version, edit the version in `packages/durable-cf-streams/package.json` directly in the release PR before merging.
 

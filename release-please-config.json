@@ -6,8 +6,8 @@
       "release-type": "node",
       "component": "durable-cf-streams",
       "include-component-in-tag": false,
-      "changelog-path": "../../CHANGELOG.md",
-      "pull-request-title-pattern": "chore(${component}): release ${version}"
+      "changelog-path": "CHANGELOG.md",
+      "pull-request-title-pattern": "chore(${scope}): release ${version}"
     }
   }
 }
