@@ -2,6 +2,7 @@ import type { AppendResult, Offset, StreamStore } from "durable-cf-streams";
 import {
   CACHE_CONTROL_HEADER,
   DEFAULT_CONTENT_TYPE,
+  encodeSSEData,
   HEAD_CACHE_CONTROL_VALUE,
   isSSETextCompatibleContentType,
   isStreamError,
@@ -33,6 +34,45 @@ export type AsyncQueue = <T>(operation: () => Promise<T>) => Promise<T>;
 export const LIVE_WAIT_TIMEOUT_MS = 20_000;
 
 export type SSEDataEncoding = "base64";
+
+export function createSSEWriter(
+  controller: ReadableStreamDefaultController<Uint8Array>
+) {
+  const encoder = new TextEncoder();
+  let pending = "";
+  let scheduled = false;
+
+  const flush = () => {
+    scheduled = false;
+
+    if (pending.length === 0) {
+      return;
+    }
+
+    const chunk = pending;
+    pending = "";
+    controller.enqueue(encoder.encode(chunk));
+  };
+
+  const scheduleFlush = () => {
+    if (!scheduled) {
+      scheduled = true;
+      queueMicrotask(flush);
+    }
+  };
+
+  return {
+    send: (event: string, data: string) => {
+      pending += `event: ${event}\n${encodeSSEData(data)}\n\n`;
+      scheduleFlush();
+    },
+    comment: (comment: string) => {
+      pending += `: ${comment}\n\n`;
+      scheduleFlush();
+    },
+    flush,
+  };
+}
 
 const STREAM_ROOT_PATH = "/v1/stream";
 const RESERVED_CONTROL_PATH = `${STREAM_ROOT_PATH}/${RESERVED_CONTROL_PATH_SEGMENT}`;
