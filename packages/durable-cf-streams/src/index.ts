@@ -1,4 +1,4 @@
-// biome-ignore lint: performance/noBarrelFile: bleh, its a library
+// biome-ignore lint/performance/noBarrelFile: this package intentionally exposes one public entrypoint.
 export {
   CACHE_CONTROL_HEADER,
   CONTENT_TYPE_OPTIONS_HEADER,

@@ -1,7 +1,7 @@
+import type { Offset } from "durable-cf-streams";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
-
-type Command = Record<string, unknown> & { op: string };
+import type { ChunkedStoreCommand } from "./chunked-worker";
 
 type CommandResult<T> =
   | { ok: true; status: number; body: T }
@@ -123,7 +123,7 @@ describe("ChunkedSqliteStore", () => {
     expect(parsed[34]?.body).toHaveLength(70_000);
   });
 
-  it("wakes waiters at the tail without materializing a snapshot", async () => {
+  it("wakes waiters from a new tail chunk", async () => {
     const path = streamPath();
     await expectOk(command({ op: "put", path, contentType: "text/plain" }));
     const head = await expectOk<{ nextOffset: string }>(
@@ -161,32 +161,28 @@ describe("ChunkedSqliteStore", () => {
       data: "x".repeat(stats.maxChunkBytes + 1),
     });
 
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) {
-      expect(rejected.status).toBe(413);
-      expect(rejected.body.error.tag).toBe("PayloadTooLargeError");
-      expect(rejected.body.error.maxBytes).toBe(stats.maxChunkBytes);
-      expect(rejected.body.error.receivedBytes).toBe(stats.maxChunkBytes + 1);
-    }
+    const error = expectError(rejected);
+    expect(error.status).toBe(413);
+    expect(error.tag).toBe("PayloadTooLargeError");
+    expect(error.maxBytes).toBe(stats.maxChunkBytes);
+    expect(error.receivedBytes).toBe(stats.maxChunkBytes + 1);
 
     const read = await expectOk<{ body: string }>(command({ op: "get", path }));
     expect(read.body).toBe("ok");
   });
 
-  it("normalizes snapshot SqliteStore row-size failures", async () => {
+  it("rejects snapshot SqliteStore payloads above the SQL value limit", async () => {
     const rejected = await command({
       op: "snapshotTooLarge",
       path: streamPath(),
       size: 2_000_001,
     });
 
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) {
-      expect(rejected.status).toBe(413);
-      expect(rejected.body.error.tag).toBe("PayloadTooLargeError");
-      expect(rejected.body.error.maxBytes).toBe(2_000_000);
-      expect(rejected.body.error.receivedBytes).toBe(2_000_001);
-    }
+    const error = expectError(rejected);
+    expect(error.status).toBe(413);
+    expect(error.tag).toBe("PayloadTooLargeError");
+    expect(error.maxBytes).toBe(2_000_000);
+    expect(error.receivedBytes).toBe(2_000_001);
   });
 
   it("treats old snapshot bytes as a legacy prefix", async () => {
@@ -302,7 +298,19 @@ async function expectOk<T>(result: Promise<CommandResult<T>>): Promise<T> {
   return response.body;
 }
 
-async function command<T = unknown>(body: Command): Promise<CommandResult<T>> {
+function expectError<T>(
+  response: CommandResult<T>
+): StreamErrorBody & { status: number } {
+  expect(response.ok).toBe(false);
+  if (response.ok) {
+    throw new Error("expected command to fail");
+  }
+  return { ...response.body.error, status: response.status };
+}
+
+async function command<T = unknown>(
+  body: ChunkedStoreCommand
+): Promise<CommandResult<T>> {
   const response = await fetch(config.baseUrl, {
     method: "POST",
     body: JSON.stringify(body),
@@ -323,8 +331,8 @@ function streamPath(): string {
   return `/chunked-${crypto.randomUUID()}`;
 }
 
-function offset(seq: number, pos: number): string {
+function offset(seq: number, pos: number): Offset {
   return `${seq.toString(16).padStart(16, "0")}_${pos
     .toString(16)
-    .padStart(16, "0")}`;
+    .padStart(16, "0")}` as Offset;
 }

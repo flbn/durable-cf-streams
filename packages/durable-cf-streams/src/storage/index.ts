@@ -1,4 +1,4 @@
-// biome-ignore lint: performance/noBarrelFile: bleh, its a library
+// biome-ignore lint/performance/noBarrelFile: storage adapters are exported from one public entrypoint.
 export {
   ChunkedSqliteStore,
   type ChunkedSqliteStoreOptions,

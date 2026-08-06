@@ -28,7 +28,10 @@ import type {
   WaitResult,
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
-import { CLOUDFLARE_SQL_MAX_VALUE_BYTES } from "./platform-errors.js";
+import {
+  CLOUDFLARE_SQL_MAX_VALUE_BYTES,
+  rethrowSqlPayloadTooLargeError,
+} from "./platform-errors.js";
 import { SqliteStore } from "./sqlite.js";
 import {
   appendResult,
@@ -94,7 +97,10 @@ type PreparedAppendChunk = {
 };
 
 export type ChunkedSqliteStoreOptions = {
-  /** max bytes for one stored stream chunk. NOTE: one append writes one chunk row, so this must stay below Cloudflare's SQL row and BLOB ceiling. */
+  /**
+   * max bytes for one stored stream chunk.
+   * NOTE: one append writes one chunk row, so keep this below Cloudflare's SQL row and BLOB ceiling.
+   */
   readonly maxChunkBytes?: number;
 };
 
@@ -239,7 +245,7 @@ export class ChunkedSqliteStore implements StreamStore {
     return row;
   }
 
-  private prepareCreate(path: string, options: PutOptions): PreparedCreate {
+  private prepareCreate(options: PutOptions): PreparedCreate {
     if (options.forkedFrom === undefined) {
       const prepared = prepareInitialData(options);
       return {
@@ -251,7 +257,7 @@ export class ChunkedSqliteStore implements StreamStore {
       };
     }
 
-    return this.prepareForkCreate(path, options, options.forkedFrom);
+    return this.prepareForkCreate(options, options.forkedFrom);
   }
 
   /**
@@ -259,7 +265,6 @@ export class ChunkedSqliteStore implements StreamStore {
    * NOTE: linked parent chunks would save space, but v1 keeps delete and fork lifetime local by giving the child its own bytes.
    */
   private prepareForkCreate(
-    _path: string,
     options: PutOptions,
     sourcePath: string
   ): PreparedCreate {
@@ -344,7 +349,7 @@ export class ChunkedSqliteStore implements StreamStore {
       return Promise.resolve(this.idempotentCreateResult(existing, options));
     }
 
-    const prepared = this.prepareCreate(path, options);
+    const prepared = this.prepareCreate(options);
     const now = Date.now();
     this.sql.exec(
       `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
@@ -675,16 +680,20 @@ export class ChunkedSqliteStore implements StreamStore {
     endOffset: Offset
   ): void {
     this.assertChunkSize(data.length);
-    this.sql.exec(
-      `INSERT INTO stream_chunks (path, start_pos, end_pos, start_offset, end_offset, data)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      path,
-      startPos,
-      startPos + data.length,
-      startOffset,
-      endOffset,
-      data
-    );
+    try {
+      this.sql.exec(
+        `INSERT INTO stream_chunks (path, start_pos, end_pos, start_offset, end_offset, data)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        path,
+        startPos,
+        startPos + data.length,
+        startOffset,
+        endOffset,
+        data
+      );
+    } catch (error) {
+      rethrowSqlPayloadTooLargeError(error, data.length);
+    }
   }
 
   private readBytes(path: string, stream: StreamRow): Uint8Array {

@@ -13,7 +13,7 @@ type Env = {
   STREAMS: DurableObjectNamespace<StreamDO>;
 };
 
-type Command =
+export type ChunkedStoreCommand =
   | {
       op: "put";
       path: string;
@@ -71,7 +71,7 @@ export class StreamDO extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     try {
-      const command = (await request.json()) as Command;
+      const command = (await request.json()) as ChunkedStoreCommand;
       return await this.handle(command);
     } catch (error) {
       if (isStreamError(error)) {
@@ -93,7 +93,7 @@ export class StreamDO extends DurableObject<Env> {
     }
   }
 
-  private async handle(command: Command): Promise<Response> {
+  private async handle(command: ChunkedStoreCommand): Promise<Response> {
     switch (command.op) {
       case "put": {
         const options: PutOptions = {
