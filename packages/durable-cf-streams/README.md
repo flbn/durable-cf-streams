@@ -15,7 +15,6 @@ pnpm add durable-cf-streams
 ```typescript
 import { MemoryStore } from "durable-cf-streams/storage/memory";
 import { SqliteStore } from "durable-cf-streams/storage/sqlite";
-import { ChunkedSqliteStore } from "durable-cf-streams/storage/chunked-sqlite";
 import { D1Store } from "durable-cf-streams/storage/d1";
 import { ChunkedD1Store } from "durable-cf-streams/storage/chunked-d1";
 import { KVStore } from "durable-cf-streams/storage/kv";
@@ -26,10 +25,6 @@ const store = new MemoryStore();
 
 // sqlite (for durable objects with persistence via SqlStorage, chunked by default)
 const store = new SqliteStore(state.storage.sql);
-store.initialize(); // creates tables
-
-// explicit chunked sqlite import (same layout as SqliteStore)
-const store = new ChunkedSqliteStore(state.storage.sql);
 store.initialize(); // creates tables
 
 // d1 database
@@ -46,6 +41,8 @@ const store = new KVStore(env.KV);
 // r2 bucket
 const store = new R2Store(env.BUCKET);
 ```
+
+`ChunkedSqliteStore` is still exported from `durable-cf-streams/storage/chunked-sqlite` as an explicit name for the same sqlite layout.
 
 ## streamstore interface
 

@@ -23,8 +23,8 @@ each example tracks the full durable-streams conformance suite:
 <!-- storage backend exports from packages/durable-cf-streams/src/storage/index.ts and packages/durable-cf-streams/package.json#exports -->
 
 - **MemoryStore** - in-memory, for durable objects without persistence
-- **SqliteStore** - chunked sqlite via `SqlStorage`, for durable objects with persistence
-- **ChunkedSqliteStore** - explicit chunked sqlite import, matching `SqliteStore`
+- **SqliteStore** - sqlite via `SqlStorage`, chunked by default for durable objects with persistence
+- **ChunkedSqliteStore** - explicit name for the `SqliteStore` layout
 - **D1Store** - cloudflare d1 database
 - **ChunkedD1Store** - opt-in chunked d1 database, for high-volume streams
 - **KVStore** - workers kv
