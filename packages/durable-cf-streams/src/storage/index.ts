@@ -1,5 +1,10 @@
 // biome-ignore lint/performance/noBarrelFile: storage adapters are exported from one public entrypoint.
 export {
+  ChunkedD1Store,
+  type ChunkedD1StoreOptions,
+  DEFAULT_CHUNKED_D1_MAX_CHUNK_BYTES,
+} from "./chunked-d1.js";
+export {
   ChunkedSqliteStore,
   type ChunkedSqliteStoreOptions,
   DEFAULT_CHUNKED_SQLITE_MAX_CHUNK_BYTES,

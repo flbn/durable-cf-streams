@@ -6,12 +6,14 @@ status: proposed
 
 durable-cf-streams will keep `SqliteStore` as the existing snapshot layout and add `ChunkedSqliteStore` as an opt-in `StreamStore` implementation for SQLite-backed Durable Objects. `ChunkedSqliteStore` stores stream metadata separately from bounded `stream_chunks` rows, allowing aggregate streams to grow beyond Cloudflare's per-row and per-BLOB SQL limit without moving chunking into consumers such as Nexus. Existing snapshot bytes in `streams.data` are treated as a legacy prefix; the first implementation reads them before chunk rows and appends new data after them, but does not silently replace `SqliteStore` or rewrite existing streams.
 
+`ChunkedD1Store` uses the same layout for D1 because D1 has the same row and BLOB limit with an async prepared-statement API. It is a sibling store rather than a shared base class so each adapter stays close to the Cloudflare API it wraps.
+
 **Considered Options**
 
 - Keep the snapshot layout and tell high-volume consumers to use KV or R2. Rejected because those adapters still rewrite one data key or object and inherit same-key or same-object write constraints.
 - Make `SqliteStore` chunked by default immediately. Rejected for the first release because it silently changes a storage layout that existing users may depend on operationally.
 - Add a chunked store as a caller-visible wrapper around existing stores. Rejected because chunking is a storage-layout concern and should not leak into product code.
-- Add `ChunkedSqliteStore` as a sibling adapter with the same `StreamStore` interface. Accepted because it fixes the Cloudflare row-size limit at the adapter seam while preserving current conformance behavior and giving production consumers an explicit rollout path.
+- Add `ChunkedSqliteStore` and `ChunkedD1Store` as sibling adapters with the same `StreamStore` interface. Accepted because it fixes the Cloudflare row-size limit at the adapter seam while preserving current conformance behavior and giving production consumers an explicit rollout path.
 
 **Consequences**
 

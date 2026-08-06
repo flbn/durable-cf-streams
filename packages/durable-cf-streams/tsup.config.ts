@@ -6,6 +6,7 @@ export default defineConfig({
     "src/storage/index.ts",
     "src/storage/memory.ts",
     "src/storage/d1.ts",
+    "src/storage/chunked-d1.ts",
     "src/storage/kv.ts",
     "src/storage/r2.ts",
     "src/storage/sqlite.ts",

@@ -37,6 +37,10 @@
       "types": "./dist/storage/d1.d.ts",
       "import": "./dist/storage/d1.js"
     },
+    "./storage/chunked-d1": {
+      "types": "./dist/storage/chunked-d1.d.ts",
+      "import": "./dist/storage/chunked-d1.js"
+    },
     "./storage/kv": {
       "types": "./dist/storage/kv.d.ts",
       "import": "./dist/storage/kv.js"

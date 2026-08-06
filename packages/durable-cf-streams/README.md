@@ -17,6 +17,7 @@ import { MemoryStore } from "durable-cf-streams/storage/memory";
 import { SqliteStore } from "durable-cf-streams/storage/sqlite";
 import { ChunkedSqliteStore } from "durable-cf-streams/storage/chunked-sqlite";
 import { D1Store } from "durable-cf-streams/storage/d1";
+import { ChunkedD1Store } from "durable-cf-streams/storage/chunked-d1";
 import { KVStore } from "durable-cf-streams/storage/kv";
 import { R2Store } from "durable-cf-streams/storage/r2";
 
@@ -34,6 +35,10 @@ store.initialize(); // creates tables
 // d1 database
 const store = new D1Store(env.DB);
 await store.initialize(); // creates table
+
+// chunked d1 database (opt-in, for high-volume streams)
+const store = new ChunkedD1Store(env.DB);
+await store.initialize(); // creates tables
 
 // workers kv
 const store = new KVStore(env.KV);

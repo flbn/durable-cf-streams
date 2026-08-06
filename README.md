@@ -26,6 +26,7 @@ each example tracks the full durable-streams conformance suite:
 - **SqliteStore** - sqlite via `SqlStorage`, for durable objects with persistence
 - **ChunkedSqliteStore** - opt-in chunked sqlite via `SqlStorage`, for high-volume durable object streams
 - **D1Store** - cloudflare d1 database
+- **ChunkedD1Store** - opt-in chunked d1 database, for high-volume streams
 - **KVStore** - workers kv
 - **R2Store** - r2 bucket
 
