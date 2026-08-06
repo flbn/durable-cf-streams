@@ -24,11 +24,11 @@ import { R2Store } from "durable-cf-streams/storage/r2";
 // in-memory (for durable objects without persistence)
 const store = new MemoryStore();
 
-// sqlite (for durable objects with persistence via SqlStorage)
+// sqlite (for durable objects with persistence via SqlStorage, chunked by default)
 const store = new SqliteStore(state.storage.sql);
-store.initialize(); // creates table
+store.initialize(); // creates tables
 
-// chunked sqlite (opt-in, for high-volume durable object streams)
+// explicit chunked sqlite import (same layout as SqliteStore)
 const store = new ChunkedSqliteStore(state.storage.sql);
 store.initialize(); // creates tables
 

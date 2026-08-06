@@ -20,20 +20,20 @@ pnpm test
 
 <!-- production sqlite store guidance from packages/durable-cf-streams/src/storage/sqlite.ts and packages/durable-cf-streams/src/storage/chunked-sqlite.ts -->
 
-this example uses `SqliteStore` because it is the smallest persistent setup. `SqliteStore` keeps each stream as one row, so it is a good fit when a stream is expected to stay below Cloudflare's 2 MB SQLite row and BLOB limit.
+this example uses `SqliteStore`, the default persistent store for SQLite-backed Durable Objects. `SqliteStore` uses the chunked layout, so one stream can grow past Cloudflare's 2 MB SQLite row and BLOB limit through many appends.
 
-use `ChunkedSqliteStore` when a single stream can grow past that limit through many appends. it uses the same `StreamStore` interface as `SqliteStore`, so the Durable Object binding and request handlers can stay the same:
+set `maxChunkBytes` when one appended event needs a smaller per-row ceiling than the default. the Durable Object binding and request handlers stay the same:
 
 ```typescript
 import type { StreamStore } from "durable-cf-streams";
-import { ChunkedSqliteStore } from "durable-cf-streams/storage/chunked-sqlite";
+import { SqliteStore } from "durable-cf-streams/storage/sqlite";
 
 export class StreamDO extends DurableObject<Env> {
   private readonly store: StreamStore;
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
-    const store = new ChunkedSqliteStore(state.storage.sql, {
+    const store = new SqliteStore(state.storage.sql, {
       maxChunkBytes: 1_000_000,
     });
     store.initialize();
@@ -42,6 +42,6 @@ export class StreamDO extends DurableObject<Env> {
 }
 ```
 
-existing `SqliteStore` bytes remain readable as a legacy prefix; enabling the chunked store does not rewrite old rows.
+existing snapshot bytes remain readable as a legacy prefix; enabling the current layout does not rewrite old rows.
 
 each individual append still has to fit within `maxChunkBytes`. if one event can exceed that size, split it before calling `append`.

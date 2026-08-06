@@ -6,7 +6,6 @@ import {
   type PutOptions,
   streamErrorStatus,
 } from "durable-cf-streams";
-import { ChunkedSqliteStore } from "durable-cf-streams/storage/chunked-sqlite";
 import { SqliteStore } from "durable-cf-streams/storage/sqlite";
 
 type Env = {
@@ -38,8 +37,7 @@ export type ChunkedStoreCommand =
   | { op: "delete"; path: string }
   | { op: "wait"; path: string; offset: Offset; timeoutMs?: number }
   | { op: "stats"; path: string }
-  | { op: "seedLegacy"; path: string; data: string; contentType?: string }
-  | { op: "snapshotTooLarge"; path: string; size: number };
+  | { op: "seedLegacy"; path: string; data: string; contentType?: string };
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -59,11 +57,11 @@ export default {
 };
 
 export class StreamDO extends DurableObject<Env> {
-  private readonly store: ChunkedSqliteStore;
+  private readonly store: SqliteStore;
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
-    this.store = new ChunkedSqliteStore(state.storage.sql, {
+    this.store = new SqliteStore(state.storage.sql, {
       maxChunkBytes: MAX_CHUNK_BYTES,
     });
     this.store.initialize();
@@ -212,17 +210,6 @@ export class StreamDO extends DurableObject<Env> {
         );
 
         return json({ nextOffset });
-      }
-      case "snapshotTooLarge": {
-        const store = new SqliteStore(this.ctx.storage.sql);
-        store.initialize();
-        await store.put(command.path, { contentType: "text/plain" });
-        await store.append(
-          command.path,
-          encoder.encode("x".repeat(command.size)),
-          { contentType: "text/plain" }
-        );
-        return json({ appended: true });
       }
       default: {
         const _exhaustive: never = command;

@@ -37,7 +37,7 @@ afterAll(async () => {
   await worker?.stop();
 });
 
-describe("ChunkedSqliteStore", () => {
+describe("SqliteStore chunked layout", () => {
   it("stores aggregate streams beyond the SQLite row limit in bounded chunks", async () => {
     const path = streamPath();
     await expectOk(command({ op: "put", path, contentType: "text/plain" }));
@@ -169,20 +169,6 @@ describe("ChunkedSqliteStore", () => {
 
     const read = await expectOk<{ body: string }>(command({ op: "get", path }));
     expect(read.body).toBe("ok");
-  });
-
-  it("rejects snapshot SqliteStore payloads above the SQL value limit", async () => {
-    const rejected = await command({
-      op: "snapshotTooLarge",
-      path: streamPath(),
-      size: 2_000_001,
-    });
-
-    const error = expectError(rejected);
-    expect(error.status).toBe(413);
-    expect(error.tag).toBe("PayloadTooLargeError");
-    expect(error.maxBytes).toBe(2_000_000);
-    expect(error.receivedBytes).toBe(2_000_001);
   });
 
   it("treats old snapshot bytes as a legacy prefix", async () => {

@@ -32,7 +32,7 @@ import {
   CLOUDFLARE_SQL_MAX_VALUE_BYTES,
   rethrowSqlPayloadTooLargeError,
 } from "./platform-errors.js";
-import { SqliteStore } from "./sqlite.js";
+import { initializeSqliteStreamsSchema } from "./sqlite-schema.js";
 import {
   appendResult,
   assertStreamLive,
@@ -135,7 +135,7 @@ const resolveMaxChunkBytes = (value: number | undefined): number => {
 };
 
 /**
- * opt-in SQLite store for streams that can outgrow one Cloudflare SQL row.
+ * explicit sqlite store name for the chunked layout that `SqliteStore` now uses by default.
  * NOTE: one append writes one bounded chunk row; callers that need larger single events should split them before append.
  * NOTE: old `streams.data` bytes stay as a legacy prefix so enabling this adapter does not rewrite existing streams.
  */
@@ -165,7 +165,7 @@ export class ChunkedSqliteStore implements StreamStore {
   }
 
   initialize(): void {
-    new SqliteStore(this.sql).initialize();
+    initializeSqliteStreamsSchema(this.sql);
     this.sql.exec(ChunkedSqliteStore.schema);
   }
 
