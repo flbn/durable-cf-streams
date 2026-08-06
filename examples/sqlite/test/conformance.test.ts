@@ -23,6 +23,15 @@ afterAll(async () => {
 runConformanceTests(config);
 
 describe("SqliteStore storage layout", () => {
+  it("stores initial stream bodies beyond the SQL row limit in bounded chunks", async () => {
+    const path = streamPath();
+    const expected = "initial:".padEnd(SQL_ROW_LIMIT_BYTES + 300_000, "i");
+
+    await createTextStream(path, expected);
+
+    await expect(getText(path)).resolves.toBe(expected);
+  });
+
   it("stores appended stream bodies beyond the SQL row limit", async () => {
     const path = streamPath();
     await createTextStream(path);
@@ -52,10 +61,11 @@ describe("SqliteStore storage layout", () => {
   });
 });
 
-async function createTextStream(path: string): Promise<void> {
+async function createTextStream(path: string, body = ""): Promise<void> {
   const response = await fetch(`${config.baseUrl}${path}`, {
     method: "PUT",
     headers: { "Content-Type": "text/plain" },
+    body,
   });
   expect(response.status).toBe(201);
 }
