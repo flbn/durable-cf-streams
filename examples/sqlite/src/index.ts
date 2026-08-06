@@ -59,7 +59,7 @@ export class StreamDO extends DurableObject<Env> {
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
-    const sqliteStore = new SqliteStore(state.storage.sql);
+    const sqliteStore = new SqliteStore(state.storage);
     sqliteStore.initialize();
     this.store = sqliteStore;
   }

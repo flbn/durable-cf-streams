@@ -141,6 +141,7 @@ const resolveMaxChunkBytes = (value: number | undefined): number => {
  * NOTE: one append writes one bounded chunk row; callers that need larger single events should split them before append.
  */
 export class SqliteStore implements StreamStore {
+  private readonly storage: DurableObjectStorage;
   private readonly sql: SqlStorage;
   private readonly maxChunkBytes: number;
   private readonly waiters = new Map<string, Waiter[]>();
@@ -163,14 +164,23 @@ export class SqliteStore implements StreamStore {
   static schema = `${SQLITE_STREAMS_SCHEMA};
 ${SqliteStore.chunkSchema}`;
 
-  constructor(sql: SqlStorage, options?: SqliteStoreOptions) {
-    this.sql = sql;
+  constructor(storage: DurableObjectStorage, options?: SqliteStoreOptions) {
+    this.storage = storage;
+    this.sql = storage.sql;
     this.maxChunkBytes = resolveMaxChunkBytes(options?.maxChunkBytes);
   }
 
   initialize(): void {
     initializeSqliteStreamsSchema(this.sql);
     this.sql.exec(SqliteStore.chunkSchema);
+  }
+
+  /**
+   * commits stream metadata and chunk rows together.
+   * NOTE: failed chunk writes must not leave a stream row claiming bytes that were never stored.
+   */
+  private writeTransaction<T>(operation: () => T): T {
+    return this.storage.transactionSync(operation);
   }
 
   private touchStream(path: string, row: StreamRow): StreamRow {
@@ -299,12 +309,6 @@ ${SqliteStore.chunkSchema}`;
       options
     );
 
-    this.sql.exec(
-      "UPDATE streams SET child_count = ? WHERE path = ?",
-      source.child_count + 1,
-      sourcePath
-    );
-
     return {
       ...prepared,
       contentType: source.content_type,
@@ -355,26 +359,35 @@ ${SqliteStore.chunkSchema}`;
 
     const prepared = this.prepareCreate(options);
     const now = Date.now();
-    this.sql.exec(
-      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      path,
-      prepared.contentType,
-      prepared.ttlSeconds ?? null,
-      prepared.expiresAt ?? null,
-      now,
-      now,
-      prepared.nextOffset,
-      "{}",
-      prepared.appendCount,
-      prepared.closed ? 1 : 0,
-      prepared.forkedFrom ?? null,
-      prepared.forkOffset ?? null,
-      prepared.forkSubOffset ?? null,
-      0,
-      0
-    );
-    this.insertInitialChunks(path, prepared.data, prepared.nextOffset);
+    this.writeTransaction(() => {
+      if (prepared.forkedFrom !== undefined) {
+        this.sql.exec(
+          "UPDATE streams SET child_count = child_count + 1 WHERE path = ?",
+          prepared.forkedFrom
+        );
+      }
+
+      this.sql.exec(
+        `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        path,
+        prepared.contentType,
+        prepared.ttlSeconds ?? null,
+        prepared.expiresAt ?? null,
+        now,
+        now,
+        prepared.nextOffset,
+        "{}",
+        prepared.appendCount,
+        prepared.closed ? 1 : 0,
+        prepared.forkedFrom ?? null,
+        prepared.forkOffset ?? null,
+        prepared.forkSubOffset ?? null,
+        0,
+        0
+      );
+      this.insertInitialChunks(path, prepared.data, prepared.nextOffset);
+    });
 
     this.streamCache.set(path, { contentType: prepared.contentType });
     return Promise.resolve({
@@ -435,29 +448,31 @@ ${SqliteStore.chunkSchema}`;
       stream.append_count,
       stream.next_offset
     );
-    const touched = this.touchStream(path, stream);
+    this.writeTransaction(() => {
+      const touched = this.touchStream(path, stream);
 
-    if (append.appended) {
-      const startPos = offsetToBytePos(stream.next_offset);
-      this.insertChunk(
-        path,
-        startPos,
-        append.data,
-        stream.next_offset,
-        append.nextOffset
+      if (append.appended) {
+        const startPos = offsetToBytePos(stream.next_offset);
+        this.insertChunk(
+          path,
+          startPos,
+          append.data,
+          stream.next_offset,
+          append.nextOffset
+        );
+      }
+
+      this.sql.exec(
+        "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ?, last_accessed_at = ? WHERE path = ?",
+        append.nextOffset,
+        append.appendCount,
+        options?.seq ?? stream.last_seq,
+        JSON.stringify(commitProducerAppend(producers, producerDecision)),
+        options?.close === true ? 1 : 0,
+        touched.last_accessed_at,
+        path
       );
-    }
-
-    this.sql.exec(
-      "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ?, last_accessed_at = ? WHERE path = ?",
-      append.nextOffset,
-      append.appendCount,
-      options?.seq ?? stream.last_seq,
-      JSON.stringify(commitProducerAppend(producers, producerDecision)),
-      options?.close === true ? 1 : 0,
-      touched.last_accessed_at,
-      path
-    );
+    });
 
     this.notifyWaiters(
       path,

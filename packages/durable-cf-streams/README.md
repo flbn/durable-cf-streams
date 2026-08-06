@@ -22,8 +22,8 @@ import { R2Store } from "durable-cf-streams/storage/r2";
 // in-memory (for durable objects without persistence)
 const store = new MemoryStore();
 
-// sqlite (for durable objects with persistence via SqlStorage and bounded chunk rows)
-const store = new SqliteStore(state.storage.sql);
+// sqlite (for durable objects with persistence and bounded chunk rows)
+const store = new SqliteStore(state.storage);
 store.initialize(); // creates tables
 
 // d1 database with bounded chunk rows
@@ -223,7 +223,7 @@ export class StreamDO extends DurableObject {
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
-    this.store = new SqliteStore(state.storage.sql);
+    this.store = new SqliteStore(state.storage);
     this.store.initialize();
   }
 

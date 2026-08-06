@@ -358,11 +358,6 @@ ${D1Store.chunksByEndIndex}`;
       options
     );
 
-    await this.db
-      .prepare("UPDATE streams SET child_count = ? WHERE path = ?")
-      .bind(source.child_count + 1, sourcePath)
-      .run();
-
     return {
       ...prepared,
       contentType: source.content_type,
@@ -413,36 +408,46 @@ ${D1Store.chunksByEndIndex}`;
 
     const prepared = await this.prepareCreate(options);
     const now = Date.now();
-    try {
-      await this.db.batch([
+    const statements: D1PreparedStatement[] = [];
+
+    if (prepared.forkedFrom !== undefined) {
+      statements.push(
         this.db
           .prepare(
-            `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            "UPDATE streams SET child_count = child_count + 1 WHERE path = ?"
           )
-          .bind(
-            path,
-            prepared.contentType,
-            prepared.ttlSeconds ?? null,
-            prepared.expiresAt ?? null,
-            now,
-            now,
-            prepared.nextOffset,
-            "{}",
-            prepared.appendCount,
-            prepared.closed ? 1 : 0,
-            prepared.forkedFrom ?? null,
-            prepared.forkOffset ?? null,
-            prepared.forkSubOffset ?? null,
-            0,
-            0
-          ),
-        ...this.initialChunkStatements(
+          .bind(prepared.forkedFrom)
+      );
+    }
+
+    statements.push(
+      this.db
+        .prepare(
+          `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
           path,
-          prepared.data,
-          prepared.nextOffset
+          prepared.contentType,
+          prepared.ttlSeconds ?? null,
+          prepared.expiresAt ?? null,
+          now,
+          now,
+          prepared.nextOffset,
+          "{}",
+          prepared.appendCount,
+          prepared.closed ? 1 : 0,
+          prepared.forkedFrom ?? null,
+          prepared.forkOffset ?? null,
+          prepared.forkSubOffset ?? null,
+          0,
+          0
         ),
-      ]);
+      ...this.initialChunkStatements(path, prepared.data, prepared.nextOffset)
+    );
+
+    try {
+      await this.db.batch(statements);
     } catch (error) {
       rethrowSqlPayloadTooLargeError(
         error,

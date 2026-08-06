@@ -1,6 +1,6 @@
 # sqlite example
 
-durable streams implementation using `SqliteStore` with Durable Objects' `SqlStorage` for persistence.
+durable streams implementation using `SqliteStore` with durable object storage for persistence.
 
 ## run tests
 
