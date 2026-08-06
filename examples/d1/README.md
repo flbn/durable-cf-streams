@@ -20,6 +20,12 @@ CONFORMANCE_TEST_URL=http://127.0.0.1:8701 pnpm run test
 
 runs the [durable-streams conformance suite](https://github.com/durable-streams/durable-streams/tree/main/packages/server-conformance-tests).
 
+## storage notes
+
+<!-- d1 store behavior from packages/durable-cf-streams/src/storage/d1.ts -->
+
+this example uses `D1Store`, the persistent store for cloudflare d1. appends write bounded rows to `stream_chunks` so a stream can grow without rewriting one SQL row.
+
 ## types
 
 ```bash

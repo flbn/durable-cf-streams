@@ -1,7 +1,15 @@
-// biome-ignore lint: performance/noBarrelFile: bleh, its a library
-export { D1Store } from "./d1.js";
+// biome-ignore lint/performance/noBarrelFile: storage adapters are exported from one public entrypoint.
+export {
+  D1Store,
+  type D1StoreOptions,
+  DEFAULT_D1_MAX_CHUNK_BYTES,
+} from "./d1.js";
 export type { StreamStore } from "./interface.js";
 export { KVStore } from "./kv.js";
 export { MemoryStore } from "./memory.js";
 export { R2Store } from "./r2.js";
-export { SqliteStore } from "./sqlite.js";
+export {
+  DEFAULT_SQLITE_MAX_CHUNK_BYTES,
+  SqliteStore,
+  type SqliteStoreOptions,
+} from "./sqlite.js";
