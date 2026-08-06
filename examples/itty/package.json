@@ -15,6 +15,6 @@
   },
   "dependencies": {
     "durable-cf-streams": "workspace:*",
-    "itty-router": "5.0.23"
+    "itty-router": "5.0.24"
   }
 }
