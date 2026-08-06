@@ -23,6 +23,11 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
+  CLOUDFLARE_SQL_MAX_VALUE_BYTES,
+  rethrowSqlPayloadTooLargeError,
+  throwSqlPayloadTooLargeError,
+} from "./platform-errors.js";
+import {
   appendResult,
   assertStreamLive,
   closedAppendResult,
@@ -325,31 +330,38 @@ export class D1Store implements StreamStore {
     }
 
     const prepared = await this.prepareCreate(options);
+    if (prepared.data.length > CLOUDFLARE_SQL_MAX_VALUE_BYTES) {
+      throwSqlPayloadTooLargeError(prepared.data.length);
+    }
     const now = Date.now();
-    await this.db
-      .prepare(`
-        INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .bind(
-        path,
-        prepared.contentType,
-        prepared.ttlSeconds ?? null,
-        prepared.expiresAt ?? null,
-        now,
-        now,
-        prepared.data,
-        prepared.nextOffset,
-        "{}",
-        prepared.appendCount,
-        prepared.closed ? 1 : 0,
-        prepared.forkedFrom ?? null,
-        prepared.forkOffset ?? null,
-        prepared.forkSubOffset ?? null,
-        0,
-        0
-      )
-      .run();
+    try {
+      await this.db
+        .prepare(`
+          INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+          path,
+          prepared.contentType,
+          prepared.ttlSeconds ?? null,
+          prepared.expiresAt ?? null,
+          now,
+          now,
+          prepared.data,
+          prepared.nextOffset,
+          "{}",
+          prepared.appendCount,
+          prepared.closed ? 1 : 0,
+          prepared.forkedFrom ?? null,
+          prepared.forkOffset ?? null,
+          prepared.forkSubOffset ?? null,
+          0,
+          0
+        )
+        .run();
+    } catch (error) {
+      rethrowSqlPayloadTooLargeError(error, prepared.data.length);
+    }
 
     this.streamCache.set(path, { contentType: prepared.contentType });
 
@@ -414,25 +426,32 @@ export class D1Store implements StreamStore {
       stream.append_count,
       stream.next_offset
     );
+    if (append.data.length > CLOUDFLARE_SQL_MAX_VALUE_BYTES) {
+      throwSqlPayloadTooLargeError(append.data.length);
+    }
     stream = await this.touchStream(path, stream);
 
-    await this.db
-      .prepare(`
-        UPDATE streams
-        SET data = ?, next_offset = ?, last_seq = ?, producers = ?, append_count = ?, closed = ?, last_accessed_at = ?
-        WHERE path = ?
-      `)
-      .bind(
-        append.data,
-        append.nextOffset,
-        options?.seq ?? stream.last_seq,
-        JSON.stringify(commitProducerAppend(producers, producerDecision)),
-        append.appendCount,
-        options?.close === true ? 1 : 0,
-        stream.last_accessed_at,
-        path
-      )
-      .run();
+    try {
+      await this.db
+        .prepare(`
+          UPDATE streams
+          SET data = ?, next_offset = ?, last_seq = ?, producers = ?, append_count = ?, closed = ?, last_accessed_at = ?
+          WHERE path = ?
+        `)
+        .bind(
+          append.data,
+          append.nextOffset,
+          options?.seq ?? stream.last_seq,
+          JSON.stringify(commitProducerAppend(producers, producerDecision)),
+          append.appendCount,
+          options?.close === true ? 1 : 0,
+          stream.last_accessed_at,
+          path
+        )
+        .run();
+    } catch (error) {
+      rethrowSqlPayloadTooLargeError(error, append.data.length);
+    }
 
     this.notifyWaiters(path, append.data, options?.close === true);
 
