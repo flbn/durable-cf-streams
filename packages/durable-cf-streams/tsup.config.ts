@@ -9,6 +9,7 @@ export default defineConfig({
     "src/storage/kv.ts",
     "src/storage/r2.ts",
     "src/storage/sqlite.ts",
+    "src/storage/chunked-sqlite.ts",
   ],
   format: ["esm"],
   dts: true,

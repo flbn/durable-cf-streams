@@ -48,6 +48,10 @@
     "./storage/sqlite": {
       "types": "./dist/storage/sqlite.d.ts",
       "import": "./dist/storage/sqlite.js"
+    },
+    "./storage/chunked-sqlite": {
+      "types": "./dist/storage/chunked-sqlite.d.ts",
+      "import": "./dist/storage/chunked-sqlite.js"
     }
   },
   "files": [

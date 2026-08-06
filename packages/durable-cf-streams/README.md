@@ -10,9 +10,12 @@ pnpm add durable-cf-streams
 
 ## storage backends
 
+<!-- storage backend exports from packages/durable-cf-streams/src/storage/index.ts and packages/durable-cf-streams/package.json#exports -->
+
 ```typescript
 import { MemoryStore } from "durable-cf-streams/storage/memory";
 import { SqliteStore } from "durable-cf-streams/storage/sqlite";
+import { ChunkedSqliteStore } from "durable-cf-streams/storage/chunked-sqlite";
 import { D1Store } from "durable-cf-streams/storage/d1";
 import { KVStore } from "durable-cf-streams/storage/kv";
 import { R2Store } from "durable-cf-streams/storage/r2";
@@ -23,6 +26,10 @@ const store = new MemoryStore();
 // sqlite (for durable objects with persistence via SqlStorage)
 const store = new SqliteStore(state.storage.sql);
 store.initialize(); // creates table
+
+// chunked sqlite (opt-in, for high-volume durable object streams)
+const store = new ChunkedSqliteStore(state.storage.sql);
+store.initialize(); // creates tables
 
 // d1 database
 const store = new D1Store(env.DB);
