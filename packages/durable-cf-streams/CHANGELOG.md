@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/flbn/durable-cf-streams/compare/v0.2.0...v1.0.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** use chunked sql storage layouts ([#50](https://github.com/flbn/durable-cf-streams/issues/50))
+
+### Features
+
+* **storage:** use chunked sql storage layouts ([#50](https://github.com/flbn/durable-cf-streams/issues/50)) ([6b662b0](https://github.com/flbn/durable-cf-streams/commit/6b662b05f756d8baed89b0dd51c8a5e99bb19494))
+
 ## [0.2.0](https://github.com/flbn/durable-cf-streams/compare/v0.1.41...v0.2.0) (2026-06-15)
 
 
