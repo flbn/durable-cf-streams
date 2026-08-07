@@ -1,12 +1,18 @@
+import { Deferred, Effect } from "effect";
 import { calculateCursor } from "../cursor.js";
-import { StreamConflictError, StreamNotFoundError } from "../errors.js";
-import { initialOffset, offsetToBytePos } from "../offsets.js";
+import {
+  PayloadTooLargeError,
+  StreamConflictError,
+  StreamNotFoundError,
+} from "../errors.js";
+import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
 import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
   isExpired,
   isJsonContentType,
+  processJsonAppend,
 } from "../protocol.js";
 import { decodeProducerStateMapJson } from "../schema.js";
 import type {
@@ -23,12 +29,19 @@ import type {
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
+  CLOUDFLARE_SQL_MAX_VALUE_BYTES,
+  rethrowSqlPayloadTooLargeError,
+} from "./platform-errors.js";
+import {
+  initializeSqliteStreamsSchema,
+  SQLITE_STREAMS_SCHEMA,
+} from "./sqlite-schema.js";
+import {
   appendResult,
   assertStreamLive,
   closedAppendResult,
   inheritedExpiration,
   normalizeForkSubOffset,
-  prepareAppendData,
   prepareForkData,
   prepareInitialData,
   resolveCreateContentType,
@@ -36,12 +49,7 @@ import {
   validateAppendSeq,
   validateIdempotentCreate,
 } from "./utils.js";
-import {
-  notifyDataWaiters,
-  notifyDeletedWaiters,
-  type Waiter,
-  waitForChange,
-} from "./waiters.js";
+import { notifyDeletedWaiters, type Waiter, waitForChange } from "./waiters.js";
 
 type StreamRow = {
   path: string;
@@ -50,7 +58,6 @@ type StreamRow = {
   expires_at: string | null;
   created_at: number;
   last_accessed_at: number | null;
-  data: ArrayBuffer;
   next_offset: Offset;
   last_seq: string | null;
   producers: string;
@@ -61,6 +68,14 @@ type StreamRow = {
   fork_sub_offset: number | null;
   child_count: number;
   deleted: number;
+};
+
+type ChunkRow = {
+  start_pos: number;
+  end_pos: number;
+  start_offset: Offset;
+  end_offset: Offset;
+  data: ArrayBuffer;
 };
 
 type PreparedCreate = {
@@ -76,6 +91,23 @@ type PreparedCreate = {
   readonly forkSubOffset?: number;
 };
 
+type PreparedAppendChunk = {
+  readonly data: Uint8Array;
+  readonly appendCount: number;
+  readonly nextOffset: Offset;
+  readonly appended: boolean;
+};
+
+export type SqliteStoreOptions = {
+  /**
+   * max bytes for one stored stream chunk.
+   * NOTE: one append writes one chunk row, so keep this below Cloudflare's SQL row and BLOB ceiling.
+   */
+  readonly maxChunkBytes?: number;
+};
+
+export const DEFAULT_SQLITE_MAX_CHUNK_BYTES = 1_000_000;
+
 const isRowExpired = (row: {
   ttl_seconds: number | null;
   expires_at: string | null;
@@ -89,72 +121,66 @@ const isRowExpired = (row: {
     lastAccessedAt: row.last_accessed_at ?? undefined,
   });
 
+const resolveMaxChunkBytes = (value: number | undefined): number => {
+  const maxChunkBytes = value ?? DEFAULT_SQLITE_MAX_CHUNK_BYTES;
+  if (
+    !Number.isSafeInteger(maxChunkBytes) ||
+    maxChunkBytes <= 0 ||
+    maxChunkBytes > CLOUDFLARE_SQL_MAX_VALUE_BYTES
+  ) {
+    throw new RangeError(
+      `maxChunkBytes must be an integer between 1 and ${CLOUDFLARE_SQL_MAX_VALUE_BYTES}`
+    );
+  }
+
+  return maxChunkBytes;
+};
+
+/**
+ * sqlite store backed by stream metadata rows and bounded append chunks.
+ * NOTE: one append writes one bounded chunk row; callers that need larger single events should split them before append.
+ */
 export class SqliteStore implements StreamStore {
+  private readonly storage: DurableObjectStorage;
   private readonly sql: SqlStorage;
+  private readonly maxChunkBytes: number;
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly streamCache = new Map<string, { contentType: string }>();
 
-  static schema = `
-    CREATE TABLE IF NOT EXISTS streams (
-      path TEXT PRIMARY KEY,
-      content_type TEXT NOT NULL,
-      ttl_seconds INTEGER,
-      expires_at TEXT,
-      created_at INTEGER NOT NULL,
-      last_accessed_at INTEGER,
-      data BLOB NOT NULL DEFAULT x'',
-      next_offset TEXT NOT NULL,
-      last_seq TEXT,
-      producers TEXT NOT NULL DEFAULT '{}',
-      append_count INTEGER NOT NULL DEFAULT 0,
-      closed INTEGER NOT NULL DEFAULT 0,
-      forked_from TEXT,
-      fork_offset TEXT,
-      fork_sub_offset INTEGER,
-      child_count INTEGER NOT NULL DEFAULT 0,
-      deleted INTEGER NOT NULL DEFAULT 0
-    )
+  private static chunkSchema = `
+    CREATE TABLE IF NOT EXISTS stream_chunks (
+      path TEXT NOT NULL,
+      start_pos INTEGER NOT NULL,
+      end_pos INTEGER NOT NULL,
+      start_offset TEXT NOT NULL,
+      end_offset TEXT NOT NULL,
+      data BLOB NOT NULL,
+      PRIMARY KEY (path, start_pos)
+    );
+    CREATE INDEX IF NOT EXISTS stream_chunks_by_end
+      ON stream_chunks(path, end_pos);
   `;
 
-  constructor(sql: SqlStorage) {
-    this.sql = sql;
+  static schema = `${SQLITE_STREAMS_SCHEMA};
+${SqliteStore.chunkSchema}`;
+
+  constructor(storage: DurableObjectStorage, options?: SqliteStoreOptions) {
+    this.storage = storage;
+    this.sql = storage.sql;
+    this.maxChunkBytes = resolveMaxChunkBytes(options?.maxChunkBytes);
   }
 
   initialize(): void {
-    this.sql.exec(SqliteStore.schema);
-    const columns = this.sql.exec("PRAGMA table_info(streams)").toArray() as {
-      name: string;
-    }[];
-    const hasColumn = (name: string) =>
-      columns.some((column) => column.name === name);
-    const addColumn = (name: string, sql: string) => {
-      if (!hasColumn(name)) {
-        this.sql.exec(sql);
-      }
-    };
+    initializeSqliteStreamsSchema(this.sql);
+    this.sql.exec(SqliteStore.chunkSchema);
+  }
 
-    addColumn(
-      "closed",
-      "ALTER TABLE streams ADD COLUMN closed INTEGER NOT NULL DEFAULT 0"
-    );
-    addColumn(
-      "last_accessed_at",
-      "ALTER TABLE streams ADD COLUMN last_accessed_at INTEGER"
-    );
-    addColumn("forked_from", "ALTER TABLE streams ADD COLUMN forked_from TEXT");
-    addColumn("fork_offset", "ALTER TABLE streams ADD COLUMN fork_offset TEXT");
-    addColumn(
-      "fork_sub_offset",
-      "ALTER TABLE streams ADD COLUMN fork_sub_offset INTEGER"
-    );
-    addColumn(
-      "child_count",
-      "ALTER TABLE streams ADD COLUMN child_count INTEGER NOT NULL DEFAULT 0"
-    );
-    addColumn(
-      "deleted",
-      "ALTER TABLE streams ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
-    );
+  /**
+   * commits stream metadata and chunk rows together.
+   * NOTE: failed chunk writes must not leave a stream row claiming bytes that were never stored.
+   */
+  private writeTransaction<T>(operation: () => T): T {
+    return this.storage.transactionSync(operation);
   }
 
   private touchStream(path: string, row: StreamRow): StreamRow {
@@ -184,6 +210,7 @@ export class SqliteStore implements StreamStore {
 
   private hardDelete(path: string, row: StreamRow): void {
     this.notifyDeleted(path);
+    this.sql.exec("DELETE FROM stream_chunks WHERE path = ?", path);
     this.sql.exec("DELETE FROM streams WHERE path = ?", path);
     this.releaseParent(row.forked_from ?? undefined);
   }
@@ -247,6 +274,10 @@ export class SqliteStore implements StreamStore {
     return this.prepareForkCreate(options, options.forkedFrom);
   }
 
+  /**
+   * copy a fork prefix into the child stream.
+   * NOTE: linked parent chunks would save space, but v1 keeps delete and fork lifetime local by giving the child its own bytes.
+   */
   private prepareForkCreate(
     options: PutOptions,
     sourcePath: string
@@ -260,10 +291,11 @@ export class SqliteStore implements StreamStore {
     }
     validateAppendContentType(source.content_type, options.contentType);
 
+    const sourceData = this.readBytes(sourcePath);
     const forkOffset = options.forkOffset ?? source.next_offset;
     const forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
     const prepared = prepareForkData(
-      new Uint8Array(source.data),
+      sourceData,
       forkOffset,
       source.content_type,
       forkSubOffset,
@@ -275,12 +307,6 @@ export class SqliteStore implements StreamStore {
         expiresAt: source.expires_at ?? undefined,
       },
       options
-    );
-
-    this.sql.exec(
-      "UPDATE streams SET child_count = ? WHERE path = ?",
-      source.child_count + 1,
-      sourcePath
     );
 
     return {
@@ -333,26 +359,35 @@ export class SqliteStore implements StreamStore {
 
     const prepared = this.prepareCreate(options);
     const now = Date.now();
-    this.sql.exec(
-      `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, data, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      path,
-      prepared.contentType,
-      prepared.ttlSeconds ?? null,
-      prepared.expiresAt ?? null,
-      now,
-      now,
-      prepared.data,
-      prepared.nextOffset,
-      "{}",
-      prepared.appendCount,
-      prepared.closed ? 1 : 0,
-      prepared.forkedFrom ?? null,
-      prepared.forkOffset ?? null,
-      prepared.forkSubOffset ?? null,
-      0,
-      0
-    );
+    this.writeTransaction(() => {
+      if (prepared.forkedFrom !== undefined) {
+        this.sql.exec(
+          "UPDATE streams SET child_count = child_count + 1 WHERE path = ?",
+          prepared.forkedFrom
+        );
+      }
+
+      this.sql.exec(
+        `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        path,
+        prepared.contentType,
+        prepared.ttlSeconds ?? null,
+        prepared.expiresAt ?? null,
+        now,
+        now,
+        prepared.nextOffset,
+        "{}",
+        prepared.appendCount,
+        prepared.closed ? 1 : 0,
+        prepared.forkedFrom ?? null,
+        prepared.forkOffset ?? null,
+        prepared.forkSubOffset ?? null,
+        0,
+        0
+      );
+      this.insertInitialChunks(path, prepared.data, prepared.nextOffset);
+    });
 
     this.streamCache.set(path, { contentType: prepared.contentType });
     return Promise.resolve({
@@ -407,29 +442,51 @@ export class SqliteStore implements StreamStore {
     }
     validateAppendSeq(stream.last_seq ?? undefined, options?.seq);
 
-    const existingData = new Uint8Array(stream.data);
-    const append = prepareAppendData(
-      existingData,
+    const append = this.prepareAppendChunk(
       data,
       stream.content_type,
       stream.append_count,
       stream.next_offset
     );
-    const touched = this.touchStream(path, stream);
+    this.writeTransaction(() => {
+      const touched = this.touchStream(path, stream);
 
-    this.sql.exec(
-      "UPDATE streams SET data = ?, next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ?, last_accessed_at = ? WHERE path = ?",
-      append.data,
-      append.nextOffset,
-      append.appendCount,
-      options?.seq ?? stream.last_seq,
-      JSON.stringify(commitProducerAppend(producers, producerDecision)),
-      options?.close === true ? 1 : 0,
-      touched.last_accessed_at,
-      path
+      if (append.appended) {
+        const startPos = offsetToBytePos(stream.next_offset);
+        this.insertChunk(
+          path,
+          startPos,
+          append.data,
+          stream.next_offset,
+          append.nextOffset
+        );
+      }
+
+      this.sql.exec(
+        "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ?, last_accessed_at = ? WHERE path = ?",
+        append.nextOffset,
+        append.appendCount,
+        options?.seq ?? stream.last_seq,
+        JSON.stringify(commitProducerAppend(producers, producerDecision)),
+        options?.close === true ? 1 : 0,
+        touched.last_accessed_at,
+        path
+      );
+    });
+
+    this.notifyWaiters(
+      path,
+      append.appended
+        ? [
+            {
+              offset: stream.next_offset,
+              timestamp: Date.now(),
+              data: append.data,
+            },
+          ]
+        : [],
+      options?.close === true
     );
-
-    this.notifyWaiters(path, append.data, options?.close === true);
 
     return Promise.resolve(
       appendResult(
@@ -450,17 +507,7 @@ export class SqliteStore implements StreamStore {
     const touched = this.touchStream(path, stream);
 
     const startOffset = options?.offset ?? initialOffset();
-    const byteOffset = offsetToBytePos(startOffset);
-    const data = new Uint8Array(touched.data);
-
-    const messages: StreamMessage[] = [];
-    if (byteOffset < data.length) {
-      messages.push({
-        offset: startOffset,
-        timestamp: Date.now(),
-        data: data.slice(byteOffset),
-      });
-    }
+    const messages = this.readMessages(path, startOffset);
 
     return Promise.resolve({
       messages,
@@ -525,14 +572,10 @@ export class SqliteStore implements StreamStore {
     assertStreamLive(path, { deleted: stream.deleted === 1 });
     const touched = this.touchStream(path, stream);
 
-    const data = new Uint8Array(touched.data);
-    const byteOffset = offsetToBytePos(offset);
-
-    if (byteOffset < data.length) {
+    const messages = this.readMessages(path, offset);
+    if (messages.length > 0) {
       return Promise.resolve({
-        messages: [
-          { offset, timestamp: Date.now(), data: data.slice(byteOffset) },
-        ],
+        messages,
         timedOut: false,
         closed: touched.closed === 1,
       });
@@ -591,14 +634,195 @@ export class SqliteStore implements StreamStore {
     return isJson ? formatJsonResponse(combined) : combined;
   }
 
-  private notifyWaiters(path: string, data: Uint8Array, closed = false): void {
+  private prepareAppendChunk(
+    data: Uint8Array,
+    contentType: string,
+    appendCount: number,
+    nextOffset: Offset
+  ): PreparedAppendChunk {
+    if (data.length === 0) {
+      return { data, appendCount, nextOffset, appended: false };
+    }
+
+    const chunkData = isJsonContentType(contentType)
+      ? processJsonAppend(new Uint8Array(0), data)
+      : data;
+    this.assertChunkSize(chunkData.length);
+
+    const nextPos = offsetToBytePos(nextOffset) + chunkData.length;
+    return {
+      data: chunkData,
+      appendCount: appendCount + 1,
+      nextOffset: formatOffset(appendCount + 1, nextPos),
+      appended: true,
+    };
+  }
+
+  private assertChunkSize(size: number): void {
+    if (size > this.maxChunkBytes) {
+      throw new PayloadTooLargeError(this.maxChunkBytes, size);
+    }
+  }
+
+  private insertInitialChunks(
+    path: string,
+    data: Uint8Array,
+    finalOffset: Offset
+  ): void {
+    if (data.length === 0) {
+      return;
+    }
+
+    let startPos = 0;
+    while (startPos < data.length) {
+      const endPos = Math.min(startPos + this.maxChunkBytes, data.length);
+      const chunk = data.slice(startPos, endPos);
+      const endOffset =
+        endPos === data.length ? finalOffset : formatOffset(0, endPos);
+      this.insertChunk(
+        path,
+        startPos,
+        chunk,
+        formatOffset(0, startPos),
+        endOffset
+      );
+      startPos = endPos;
+    }
+  }
+
+  private insertChunk(
+    path: string,
+    startPos: number,
+    data: Uint8Array,
+    startOffset: Offset,
+    endOffset: Offset
+  ): void {
+    this.assertChunkSize(data.length);
+    try {
+      this.sql.exec(
+        `INSERT INTO stream_chunks (path, start_pos, end_pos, start_offset, end_offset, data)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        path,
+        startPos,
+        startPos + data.length,
+        startOffset,
+        endOffset,
+        data
+      );
+    } catch (error) {
+      rethrowSqlPayloadTooLargeError(error, data.length);
+    }
+  }
+
+  private readBytes(path: string): Uint8Array {
+    const messages = this.readMessages(path, initialOffset());
+    const total = messages.reduce(
+      (acc, message) => acc + message.data.length,
+      0
+    );
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const message of messages) {
+      result.set(message.data, offset);
+      offset += message.data.length;
+    }
+    return result;
+  }
+
+  private readMessages(path: string, startOffset: Offset): StreamMessage[] {
+    const startPos = offsetToBytePos(startOffset);
+    const messages: StreamMessage[] = [];
+
+    for (const chunk of this.readChunkRows(path, startPos)) {
+      const chunkData = new Uint8Array(chunk.data);
+      const messageStart = Math.max(startPos, chunk.start_pos);
+      if (messageStart >= chunk.end_pos) {
+        continue;
+      }
+
+      let messageOffset = startOffset;
+      if (messageStart !== startPos) {
+        messageOffset =
+          messageStart === chunk.start_pos
+            ? chunk.start_offset
+            : formatOffset(0, messageStart);
+      }
+
+      messages.push({
+        offset: messageOffset,
+        timestamp: Date.now(),
+        data: chunkData.slice(messageStart - chunk.start_pos),
+      });
+    }
+
+    return messages;
+  }
+
+  private readChunkRows(path: string, startPos: number): ChunkRow[] {
+    return this.sql
+      .exec(
+        `SELECT start_pos, end_pos, start_offset, end_offset, data
+         FROM stream_chunks
+         WHERE path = ? AND end_pos > ?
+         ORDER BY start_pos`,
+        path,
+        startPos
+      )
+      .toArray() as ChunkRow[];
+  }
+
+  private notifyWaiters(
+    path: string,
+    messages: readonly StreamMessage[],
+    closed = false
+  ): void {
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
-    notifyDataWaiters(waiters, data, closed, (waiter) => {
-      const remaining = this.waiters.get(path) ?? [];
-      remaining.push(waiter);
-      this.waiters.set(path, remaining);
+
+    const effect = Effect.forEach(waiters, (waiter) => {
+      const available = this.messagesForWaiter(waiter, messages);
+
+      if (available.length > 0 || closed) {
+        return Deferred.succeed(waiter.deferred, {
+          messages: available,
+          timedOut: false,
+          closed,
+        });
+      }
+
+      return Effect.sync(() => {
+        const remaining = this.waiters.get(path) ?? [];
+        remaining.push(waiter);
+        this.waiters.set(path, remaining);
+      });
     });
+
+    Effect.runSync(effect);
+  }
+
+  private messagesForWaiter(
+    waiter: Waiter,
+    messages: readonly StreamMessage[]
+  ): StreamMessage[] {
+    const byteOffset = offsetToBytePos(waiter.offset);
+    const available: StreamMessage[] = [];
+
+    for (const message of messages) {
+      const startPos = offsetToBytePos(message.offset);
+      const endPos = startPos + message.data.length;
+      if (byteOffset >= endPos) {
+        continue;
+      }
+
+      const sliceStart = Math.max(0, byteOffset - startPos);
+      available.push({
+        offset: byteOffset > startPos ? waiter.offset : message.offset,
+        timestamp: Date.now(),
+        data: message.data.slice(sliceStart),
+      });
+    }
+
+    return available;
   }
 
   private notifyDeleted(path: string): void {

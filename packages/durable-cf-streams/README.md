@@ -10,6 +10,8 @@ pnpm add durable-cf-streams
 
 ## storage backends
 
+<!-- storage backend exports from packages/durable-cf-streams/src/storage/index.ts and packages/durable-cf-streams/package.json#exports -->
+
 ```typescript
 import { MemoryStore } from "durable-cf-streams/storage/memory";
 import { SqliteStore } from "durable-cf-streams/storage/sqlite";
@@ -20,13 +22,13 @@ import { R2Store } from "durable-cf-streams/storage/r2";
 // in-memory (for durable objects without persistence)
 const store = new MemoryStore();
 
-// sqlite (for durable objects with persistence via SqlStorage)
-const store = new SqliteStore(state.storage.sql);
-store.initialize(); // creates table
+// sqlite (for durable objects with persistence and bounded chunk rows)
+const store = new SqliteStore(state.storage);
+store.initialize(); // creates tables
 
-// d1 database
+// d1 database with bounded chunk rows
 const store = new D1Store(env.DB);
-await store.initialize(); // creates table
+await store.initialize(); // creates tables
 
 // workers kv
 const store = new KVStore(env.KV);
@@ -221,7 +223,7 @@ export class StreamDO extends DurableObject {
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
-    this.store = new SqliteStore(state.storage.sql);
+    this.store = new SqliteStore(state.storage);
     this.store.initialize();
   }
 
