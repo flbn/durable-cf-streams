@@ -6,7 +6,10 @@ import {
   StreamNotFoundError,
 } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
-import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
+import {
+  evaluateProducerAppend,
+  type ProducerAppendDecision,
+} from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
@@ -14,7 +17,6 @@ import {
   isJsonContentType,
   processJsonAppend,
 } from "../protocol.js";
-import { decodeProducerStateMapJson } from "../schema.js";
 import type {
   AppendOptions,
   AppendResult,
@@ -22,6 +24,7 @@ import type {
   GetResult,
   HeadResult,
   Offset,
+  ProducerState,
   PutOptions,
   PutResult,
   StreamMessage,
@@ -60,7 +63,6 @@ type StreamRow = {
   last_accessed_at: number | null;
   next_offset: Offset;
   last_seq: string | null;
-  producers: string;
   append_count: number;
   closed: number;
   forked_from: string | null;
@@ -76,6 +78,11 @@ type ChunkRow = {
   start_offset: Offset;
   end_offset: Offset;
   data: ArrayBuffer;
+};
+
+type ProducerRow = {
+  epoch: number;
+  seq: number;
 };
 
 type PreparedCreate = {
@@ -137,7 +144,8 @@ const resolveMaxChunkBytes = (value: number | undefined): number => {
 };
 
 /**
- * sqlite store backed by stream metadata rows and bounded append chunks.
+ * sqlite store backed by stream metadata rows, keyed producer state rows, and bounded append chunks.
+ * NOTE: producer idempotency state lives in `stream_producers`, keeping the stream metadata row bounded.
  * NOTE: one append writes one bounded chunk row; callers that need larger single events should split them before append.
  */
 export class SqliteStore implements StreamStore {
@@ -161,8 +169,19 @@ export class SqliteStore implements StreamStore {
       ON stream_chunks(path, end_pos);
   `;
 
+  private static producerSchema = `
+    CREATE TABLE IF NOT EXISTS stream_producers (
+      path TEXT NOT NULL,
+      producer_id TEXT NOT NULL,
+      epoch INTEGER NOT NULL,
+      seq INTEGER NOT NULL,
+      PRIMARY KEY (path, producer_id)
+    );
+  `;
+
   static schema = `${SQLITE_STREAMS_SCHEMA};
-${SqliteStore.chunkSchema}`;
+${SqliteStore.chunkSchema}
+${SqliteStore.producerSchema}`;
 
   constructor(storage: DurableObjectStorage, options?: SqliteStoreOptions) {
     this.storage = storage;
@@ -173,6 +192,7 @@ ${SqliteStore.chunkSchema}`;
   initialize(): void {
     initializeSqliteStreamsSchema(this.sql);
     this.sql.exec(SqliteStore.chunkSchema);
+    this.sql.exec(SqliteStore.producerSchema);
   }
 
   /**
@@ -210,6 +230,7 @@ ${SqliteStore.chunkSchema}`;
 
   private hardDelete(path: string, row: StreamRow): void {
     this.notifyDeleted(path);
+    this.sql.exec("DELETE FROM stream_producers WHERE path = ?", path);
     this.sql.exec("DELETE FROM stream_chunks WHERE path = ?", path);
     this.sql.exec("DELETE FROM streams WHERE path = ?", path);
     this.releaseParent(row.forked_from ?? undefined);
@@ -359,35 +380,41 @@ ${SqliteStore.chunkSchema}`;
 
     const prepared = this.prepareCreate(options);
     const now = Date.now();
-    this.writeTransaction(() => {
-      if (prepared.forkedFrom !== undefined) {
-        this.sql.exec(
-          "UPDATE streams SET child_count = child_count + 1 WHERE path = ?",
-          prepared.forkedFrom
-        );
-      }
+    try {
+      this.writeTransaction(() => {
+        if (prepared.forkedFrom !== undefined) {
+          this.sql.exec(
+            "UPDATE streams SET child_count = child_count + 1 WHERE path = ?",
+            prepared.forkedFrom
+          );
+        }
 
-      this.sql.exec(
-        `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        path,
-        prepared.contentType,
-        prepared.ttlSeconds ?? null,
-        prepared.expiresAt ?? null,
-        now,
-        now,
-        prepared.nextOffset,
-        "{}",
-        prepared.appendCount,
-        prepared.closed ? 1 : 0,
-        prepared.forkedFrom ?? null,
-        prepared.forkOffset ?? null,
-        prepared.forkSubOffset ?? null,
-        0,
-        0
+        this.sql.exec(
+          `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          path,
+          prepared.contentType,
+          prepared.ttlSeconds ?? null,
+          prepared.expiresAt ?? null,
+          now,
+          now,
+          prepared.nextOffset,
+          prepared.appendCount,
+          prepared.closed ? 1 : 0,
+          prepared.forkedFrom ?? null,
+          prepared.forkOffset ?? null,
+          prepared.forkSubOffset ?? null,
+          0,
+          0
+        );
+        this.insertInitialChunks(path, prepared.data, prepared.nextOffset);
+      });
+    } catch (error) {
+      rethrowSqlPayloadTooLargeError(
+        error,
+        Math.min(prepared.data.length, this.maxChunkBytes)
       );
-      this.insertInitialChunks(path, prepared.data, prepared.nextOffset);
-    });
+    }
 
     this.streamCache.set(path, { contentType: prepared.contentType });
     return Promise.resolve({
@@ -409,9 +436,8 @@ ${SqliteStore.chunkSchema}`;
     }
     assertStreamLive(path, { deleted: stream.deleted === 1 });
 
-    const producers = decodeProducerStateMapJson(stream.producers);
-    const producerDecision = evaluateProducerAppend(
-      producers,
+    const producerDecision = this.evaluateProducerDecision(
+      path,
       options?.producer
     );
     const closedResult = closedAppendResult(
@@ -448,31 +474,35 @@ ${SqliteStore.chunkSchema}`;
       stream.append_count,
       stream.next_offset
     );
-    this.writeTransaction(() => {
-      const touched = this.touchStream(path, stream);
+    try {
+      this.writeTransaction(() => {
+        const touched = this.touchStream(path, stream);
 
-      if (append.appended) {
-        const startPos = offsetToBytePos(stream.next_offset);
-        this.insertChunk(
-          path,
-          startPos,
-          append.data,
-          stream.next_offset,
-          append.nextOffset
+        if (append.appended) {
+          const startPos = offsetToBytePos(stream.next_offset);
+          this.insertChunk(
+            path,
+            startPos,
+            append.data,
+            stream.next_offset,
+            append.nextOffset
+          );
+        }
+        this.writeProducerState(path, producerDecision);
+
+        this.sql.exec(
+          "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, closed = ?, last_accessed_at = ? WHERE path = ?",
+          append.nextOffset,
+          append.appendCount,
+          options?.seq ?? stream.last_seq,
+          options?.close === true ? 1 : 0,
+          touched.last_accessed_at,
+          path
         );
-      }
-
-      this.sql.exec(
-        "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ?, last_accessed_at = ? WHERE path = ?",
-        append.nextOffset,
-        append.appendCount,
-        options?.seq ?? stream.last_seq,
-        JSON.stringify(commitProducerAppend(producers, producerDecision)),
-        options?.close === true ? 1 : 0,
-        touched.last_accessed_at,
-        path
-      );
-    });
+      });
+    } catch (error) {
+      rethrowSqlPayloadTooLargeError(error, append.data.length);
+    }
 
     this.notifyWaiters(
       path,
@@ -662,6 +692,62 @@ ${SqliteStore.chunkSchema}`;
     if (size > this.maxChunkBytes) {
       throw new PayloadTooLargeError(this.maxChunkBytes, size);
     }
+  }
+
+  private getProducerState(
+    path: string,
+    producer: AppendOptions["producer"]
+  ): ProducerState | undefined {
+    if (producer === undefined) {
+      return;
+    }
+
+    const rows = this.sql
+      .exec(
+        "SELECT epoch, seq FROM stream_producers WHERE path = ? AND producer_id = ?",
+        path,
+        producer.id
+      )
+      .toArray() as ProducerRow[];
+    if (rows.length > 0) {
+      const row = rows[0] as ProducerRow;
+      return { epoch: row.epoch, seq: row.seq };
+    }
+
+    return;
+  }
+
+  private evaluateProducerDecision(
+    path: string,
+    producer: AppendOptions["producer"]
+  ): ProducerAppendDecision {
+    const producerState = this.getProducerState(path, producer);
+    const producerStates =
+      producer === undefined || producerState === undefined
+        ? {}
+        : { [producer.id]: producerState };
+    return evaluateProducerAppend(producerStates, producer);
+  }
+
+  private writeProducerState(
+    path: string,
+    decision: ProducerAppendDecision
+  ): void {
+    if (decision._tag !== "Accepted") {
+      return;
+    }
+
+    this.sql.exec(
+      `INSERT INTO stream_producers (path, producer_id, epoch, seq)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(path, producer_id) DO UPDATE SET
+         epoch = excluded.epoch,
+         seq = excluded.seq`,
+      path,
+      decision.result.id,
+      decision.nextState.epoch,
+      decision.nextState.seq
+    );
   }
 
   private insertInitialChunks(

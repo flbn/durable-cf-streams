@@ -8,7 +8,6 @@ export const SQLITE_STREAMS_SCHEMA = `
     last_accessed_at INTEGER,
     next_offset TEXT NOT NULL,
     last_seq TEXT,
-    producers TEXT NOT NULL DEFAULT '{}',
     append_count INTEGER NOT NULL DEFAULT 0,
     closed INTEGER NOT NULL DEFAULT 0,
     forked_from TEXT,

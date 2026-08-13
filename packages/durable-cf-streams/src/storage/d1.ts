@@ -6,7 +6,10 @@ import {
   StreamNotFoundError,
 } from "../errors.js";
 import { formatOffset, initialOffset, offsetToBytePos } from "../offsets.js";
-import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
+import {
+  evaluateProducerAppend,
+  type ProducerAppendDecision,
+} from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
@@ -14,7 +17,6 @@ import {
   isJsonContentType,
   processJsonAppend,
 } from "../protocol.js";
-import { decodeProducerStateMapJson } from "../schema.js";
 import type {
   AppendOptions,
   AppendResult,
@@ -22,6 +24,7 @@ import type {
   GetResult,
   HeadResult,
   Offset,
+  ProducerState,
   PutOptions,
   PutResult,
   StreamMessage,
@@ -56,7 +59,6 @@ type StreamRow = {
   last_accessed_at: number | null;
   next_offset: Offset;
   last_seq: string | null;
-  producers: string;
   append_count: number;
   closed: number;
   forked_from: string | null;
@@ -72,6 +74,11 @@ type ChunkRow = {
   start_offset: Offset;
   end_offset: Offset;
   data: ArrayBuffer;
+};
+
+type ProducerRow = {
+  epoch: number;
+  seq: number;
 };
 
 type PreparedCreate = {
@@ -95,7 +102,7 @@ type PreparedAppendChunk = {
 };
 
 const D1_STREAMS_SCHEMA =
-  "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, last_accessed_at INTEGER, next_offset TEXT NOT NULL, last_seq TEXT, producers TEXT NOT NULL DEFAULT '{}', append_count INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0, forked_from TEXT, fork_offset TEXT, fork_sub_offset INTEGER, child_count INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);";
+  "CREATE TABLE IF NOT EXISTS streams (path TEXT PRIMARY KEY, content_type TEXT NOT NULL, ttl_seconds INTEGER, expires_at TEXT, created_at INTEGER NOT NULL, last_accessed_at INTEGER, next_offset TEXT NOT NULL, last_seq TEXT, append_count INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0, forked_from TEXT, fork_offset TEXT, fork_sub_offset INTEGER, child_count INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);";
 
 /**
  * initializes the stream metadata table used by `D1Store`.
@@ -196,7 +203,8 @@ const resolveMaxChunkBytes = (value: number | undefined): number => {
 };
 
 /**
- * d1 store backed by stream metadata rows and bounded append chunks.
+ * d1 store backed by stream metadata rows, keyed producer state rows, and bounded append chunks.
+ * NOTE: producer idempotency state lives in `stream_producers`, keeping the stream metadata row bounded.
  * NOTE: one append writes one bounded chunk row; callers that need larger single events should split them before append.
  */
 export class D1Store implements StreamStore {
@@ -211,9 +219,13 @@ export class D1Store implements StreamStore {
   private static chunksByEndIndex =
     "CREATE INDEX IF NOT EXISTS stream_chunks_by_end ON stream_chunks(path, end_pos);";
 
+  private static producerSchema =
+    "CREATE TABLE IF NOT EXISTS stream_producers (path TEXT NOT NULL, producer_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (path, producer_id));";
+
   static schema = `${D1_STREAMS_SCHEMA}
 ${D1Store.chunkSchema}
-${D1Store.chunksByEndIndex}`;
+${D1Store.chunksByEndIndex}
+${D1Store.producerSchema}`;
 
   constructor(db: D1Database, options?: D1StoreOptions) {
     this.db = db;
@@ -224,6 +236,7 @@ ${D1Store.chunksByEndIndex}`;
     await initializeD1StreamsSchema(this.db);
     await this.db.exec(D1Store.chunkSchema);
     await this.db.exec(D1Store.chunksByEndIndex);
+    await this.db.exec(D1Store.producerSchema);
   }
 
   private async touchStream(path: string, row: StreamRow): Promise<StreamRow> {
@@ -259,6 +272,7 @@ ${D1Store.chunksByEndIndex}`;
   private async hardDelete(path: string, row: StreamRow): Promise<void> {
     this.notifyDeleted(path);
     await this.db.batch([
+      this.db.prepare("DELETE FROM stream_producers WHERE path = ?").bind(path),
       this.db.prepare("DELETE FROM stream_chunks WHERE path = ?").bind(path),
       this.db.prepare("DELETE FROM streams WHERE path = ?").bind(path),
     ]);
@@ -423,8 +437,8 @@ ${D1Store.chunksByEndIndex}`;
     statements.push(
       this.db
         .prepare(
-          `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, producers, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO streams (path, content_type, ttl_seconds, expires_at, created_at, last_accessed_at, next_offset, append_count, closed, forked_from, fork_offset, fork_sub_offset, child_count, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           path,
@@ -434,7 +448,6 @@ ${D1Store.chunksByEndIndex}`;
           now,
           now,
           prepared.nextOffset,
-          "{}",
           prepared.appendCount,
           prepared.closed ? 1 : 0,
           prepared.forkedFrom ?? null,
@@ -475,9 +488,8 @@ ${D1Store.chunksByEndIndex}`;
     }
     assertStreamLive(path, { deleted: stream.deleted === 1 });
 
-    const producers = decodeProducerStateMapJson(stream.producers);
-    const producerDecision = evaluateProducerAppend(
-      producers,
+    const producerDecision = await this.evaluateProducerDecision(
+      path,
       options?.producer
     );
     const closedResult = closedAppendResult(
@@ -515,35 +527,14 @@ ${D1Store.chunksByEndIndex}`;
       stream.next_offset
     );
     const touched = await this.touchStream(path, stream);
-    const statements: D1PreparedStatement[] = [];
-
-    if (append.appended) {
-      const startPos = offsetToBytePos(stream.next_offset);
-      statements.push(
-        this.chunkInsertStatement(
-          path,
-          startPos,
-          append.data,
-          stream.next_offset,
-          append.nextOffset
-        )
-      );
-    }
-
-    statements.push(
-      this.db
-        .prepare(
-          "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, producers = ?, closed = ?, last_accessed_at = ? WHERE path = ?"
-        )
-        .bind(
-          append.nextOffset,
-          append.appendCount,
-          options?.seq ?? stream.last_seq,
-          JSON.stringify(commitProducerAppend(producers, producerDecision)),
-          options?.close === true ? 1 : 0,
-          touched.last_accessed_at,
-          path
-        )
+    const statements = this.appendStatements(
+      path,
+      stream,
+      append,
+      producerDecision,
+      options?.seq ?? stream.last_seq,
+      options?.close === true,
+      touched.last_accessed_at
     );
 
     try {
@@ -740,6 +731,112 @@ ${D1Store.chunksByEndIndex}`;
     if (size > this.maxChunkBytes) {
       throw new PayloadTooLargeError(this.maxChunkBytes, size);
     }
+  }
+
+  private async getProducerState(
+    path: string,
+    producer: AppendOptions["producer"]
+  ): Promise<ProducerState | undefined> {
+    if (producer === undefined) {
+      return;
+    }
+
+    const row = await this.db
+      .prepare(
+        "SELECT epoch, seq FROM stream_producers WHERE path = ? AND producer_id = ?"
+      )
+      .bind(path, producer.id)
+      .first<ProducerRow>();
+    if (row) {
+      return { epoch: row.epoch, seq: row.seq };
+    }
+
+    return;
+  }
+
+  private appendStatements(
+    path: string,
+    stream: StreamRow,
+    append: PreparedAppendChunk,
+    producerDecision: ProducerAppendDecision,
+    lastSeq: string | null,
+    closed: boolean,
+    lastAccessedAt: number | null
+  ): D1PreparedStatement[] {
+    const statements: D1PreparedStatement[] = [];
+
+    if (append.appended) {
+      const startPos = offsetToBytePos(stream.next_offset);
+      statements.push(
+        this.chunkInsertStatement(
+          path,
+          startPos,
+          append.data,
+          stream.next_offset,
+          append.nextOffset
+        )
+      );
+    }
+    const producerStatement = this.producerStateStatement(
+      path,
+      producerDecision
+    );
+    if (producerStatement) {
+      statements.push(producerStatement);
+    }
+
+    statements.push(
+      this.db
+        .prepare(
+          "UPDATE streams SET next_offset = ?, append_count = ?, last_seq = ?, closed = ?, last_accessed_at = ? WHERE path = ?"
+        )
+        .bind(
+          append.nextOffset,
+          append.appendCount,
+          lastSeq,
+          closed ? 1 : 0,
+          lastAccessedAt,
+          path
+        )
+    );
+
+    return statements;
+  }
+
+  private async evaluateProducerDecision(
+    path: string,
+    producer: AppendOptions["producer"]
+  ): Promise<ProducerAppendDecision> {
+    const producerState = await this.getProducerState(path, producer);
+    const producerStates =
+      producer === undefined || producerState === undefined
+        ? {}
+        : { [producer.id]: producerState };
+    return evaluateProducerAppend(producerStates, producer);
+  }
+
+  private producerStateStatement(
+    path: string,
+    decision: ProducerAppendDecision
+  ): D1PreparedStatement | undefined {
+    if (decision._tag !== "Accepted") {
+      return;
+    }
+
+    return this.db
+      .prepare(
+        `INSERT INTO stream_producers (path, producer_id, epoch, seq)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(path, producer_id) DO UPDATE SET
+           epoch = excluded.epoch,
+           seq = excluded.seq`
+      )
+      .bind(
+        path,
+        decision.result.id,
+        decision.nextState.epoch,
+        decision.nextState.seq
+      );
   }
 
   private initialChunkStatements(
