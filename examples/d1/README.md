@@ -24,7 +24,7 @@ runs the [durable-streams conformance suite](https://github.com/durable-streams/
 
 <!-- d1 store behavior from packages/durable-cf-streams/src/storage/d1.ts -->
 
-this example uses `D1Store`, the persistent store for cloudflare d1. appends write bounded rows to `stream_chunks` so a stream can grow without rewriting one SQL row.
+this example uses `D1Store`, the persistent store for cloudflare d1. appends keep stream bytes and producer state in separate SQL rows so they do not rewrite growing SQL values.
 
 ## types
 

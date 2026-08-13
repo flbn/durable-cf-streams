@@ -20,4 +20,4 @@ pnpm test
 
 <!-- sqlite store behavior from packages/durable-cf-streams/src/storage/sqlite.ts -->
 
-this example uses `SqliteStore`, the persistent store for sqlite-backed durable objects. appends write bounded rows to `stream_chunks` so a stream can grow without rewriting one SQL row.
+this example uses `SqliteStore`, the persistent store for sqlite-backed durable objects. appends keep stream bytes and producer state in separate SQL rows so they do not rewrite growing SQL values.
