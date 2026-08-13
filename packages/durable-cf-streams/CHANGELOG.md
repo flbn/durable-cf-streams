@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/flbn/durable-cf-streams/compare/v1.0.0...v1.0.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **storage:** keep sql producer state in rows ([#53](https://github.com/flbn/durable-cf-streams/issues/53)) ([4c0cfa1](https://github.com/flbn/durable-cf-streams/commit/4c0cfa11f5f64705221b607f2e95561e1a38c336))
+
 ## [1.0.0](https://github.com/flbn/durable-cf-streams/compare/v0.2.0...v1.0.0) (2026-08-07)
 
 
