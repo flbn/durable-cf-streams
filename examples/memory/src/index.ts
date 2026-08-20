@@ -15,6 +15,7 @@ import {
   STREAM_SEQ_HEADER,
   STREAM_SSE_DATA_ENCODING_HEADER,
   STREAM_UP_TO_DATE_HEADER,
+  streamErrorEventJson,
 } from "durable-cf-streams";
 import { MemoryStore } from "durable-cf-streams/storage/memory";
 import {
@@ -316,9 +317,7 @@ export class StreamDO implements DurableObject {
       await this.processSSEStream(path, state, sendControl, sendData);
     } catch (error) {
       if (!state.cancelled) {
-        const message =
-          error instanceof Error ? error.message : "Unknown error";
-        sse.send("error", JSON.stringify({ error: message }));
+        sse.send("error", streamErrorEventJson(error));
       }
     } finally {
       clearInterval(heartbeat);

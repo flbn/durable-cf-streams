@@ -163,6 +163,13 @@ export type StreamError =
   | ProducerFencedError
   | PayloadTooLargeError;
 
+export type StreamErrorEventData = {
+  readonly error: string;
+  readonly status: number;
+  readonly name: string;
+  readonly tag?: StreamError["_tag"];
+};
+
 const streamErrorTags = new Set<StreamError["_tag"]>([
   "StreamNotFoundError",
   "StreamClosedError",
@@ -235,3 +242,29 @@ export const streamErrorHeaders: (
   ),
   Match.exhaustive
 );
+
+/**
+ * builds the JSON payload for an SSE `error` event.
+ * NOTE: `error` remains the message for old consumers; `status`, `name`, and `tag` let stream readers classify and persist terminal failures instead of treating a closed response as an unknown outcome.
+ */
+export const streamErrorEventData = (error: unknown): StreamErrorEventData => {
+  const message = error instanceof Error ? error.message : "Unknown error";
+  const name = error instanceof Error ? error.name : "Error";
+  if (isStreamError(error)) {
+    return {
+      error: message,
+      status: streamErrorStatus(error),
+      name,
+      tag: error._tag,
+    };
+  }
+
+  return {
+    error: message,
+    status: 500,
+    name,
+  };
+};
+
+export const streamErrorEventJson = (error: unknown): string =>
+  JSON.stringify(streamErrorEventData(error));
