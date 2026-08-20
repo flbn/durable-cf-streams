@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/flbn/durable-cf-streams/compare/v1.0.1...v1.0.2) (2026-08-20)
+
+
+### Bug Fixes
+
+* **streams:** classify sse error events ([#55](https://github.com/flbn/durable-cf-streams/issues/55)) ([d42d862](https://github.com/flbn/durable-cf-streams/commit/d42d862ae698bdca7b6073bb4407a6ace632ff38))
+
 ## [1.0.1](https://github.com/flbn/durable-cf-streams/compare/v1.0.0...v1.0.1) (2026-08-13)
 
 

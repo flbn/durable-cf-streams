@@ -1,6 +1,6 @@
 {
   "name": "durable-cf-streams",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "pure building blocks for durable streams on cloudflare",
   "license": "MIT",
   "repository": {
