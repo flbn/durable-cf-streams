@@ -53,8 +53,11 @@ export {
   StreamClosedError,
   StreamConflictError,
   type StreamError,
+  type StreamErrorEventData,
   StreamGoneError,
   StreamNotFoundError,
+  streamErrorEventData,
+  streamErrorEventJson,
   streamErrorHeaders,
   streamErrorStatus,
 } from "./errors.js";
