@@ -4,9 +4,10 @@ export type {
   Offset,
   ProducerState,
   ProducerStateMap,
+  StreamIncarnation,
 } from "./schema.js";
 
-import type { Cursor, ETag, Offset } from "./schema.js";
+import type { Cursor, ETag, Offset, StreamIncarnation } from "./schema.js";
 
 export type StreamMessage = {
   readonly offset: Offset;
@@ -16,6 +17,7 @@ export type StreamMessage = {
 
 export type StreamMetadata = {
   readonly path: string;
+  readonly incarnation: StreamIncarnation;
   readonly contentType: string;
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
@@ -30,6 +32,7 @@ export type StreamMetadata = {
 };
 
 export type PutOptions = {
+  readonly expectedIncarnation?: StreamIncarnation;
   readonly contentType?: string;
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
@@ -42,12 +45,14 @@ export type PutOptions = {
 
 export type PutResult = {
   readonly created: boolean;
+  readonly incarnation: StreamIncarnation;
   readonly nextOffset: Offset;
   readonly contentType: string;
   readonly closed?: boolean;
 };
 
 export type AppendOptions = {
+  readonly expectedIncarnation?: StreamIncarnation;
   readonly contentType?: string;
   readonly seq?: string;
   readonly producer?: ProducerAppendOptions;
@@ -55,6 +60,7 @@ export type AppendOptions = {
 };
 
 export type AppendResult = {
+  readonly incarnation: StreamIncarnation;
   readonly nextOffset: Offset;
   readonly producer?: ProducerAppendResult;
   readonly closed?: boolean;
@@ -74,12 +80,24 @@ export type ProducerAppendResult = {
   readonly duplicate: boolean;
 };
 
+export type ProducerClaim = {
+  readonly id: string;
+  readonly epoch: number;
+  readonly nextSeq: number;
+  readonly incarnation: StreamIncarnation;
+  readonly nextOffset: Offset;
+};
+
 export type GetOptions = {
   readonly offset?: Offset;
+  readonly expectedIncarnation?: StreamIncarnation;
+  /** NOTE: set to false for live snapshots that do not perform metadata writes while they wait outside a serialized owner. */
+  readonly renewTtl?: boolean;
 };
 
 export type GetResult = {
   readonly messages: StreamMessage[];
+  readonly incarnation: StreamIncarnation;
   readonly nextOffset: Offset;
   readonly upToDate: boolean;
   readonly cursor: Cursor;
@@ -89,6 +107,7 @@ export type GetResult = {
 };
 
 export type HeadResult = {
+  readonly incarnation: StreamIncarnation;
   readonly contentType: string;
   readonly nextOffset: Offset;
   readonly etag: ETag;
@@ -100,5 +119,12 @@ export type HeadResult = {
 export type WaitResult = {
   readonly messages: StreamMessage[];
   readonly timedOut: boolean;
+  readonly incarnation?: StreamIncarnation;
   readonly closed?: boolean;
+};
+
+export type WaitOptions = {
+  readonly expectedIncarnation?: StreamIncarnation;
+  /** NOTE: set to false for live waits that do not perform metadata writes while they wait outside a serialized owner. */
+  readonly renewTtl?: boolean;
 };

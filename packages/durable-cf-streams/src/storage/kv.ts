@@ -1,7 +1,11 @@
 import { calculateCursor } from "../cursor.js";
 import { StreamConflictError, StreamNotFoundError } from "../errors.js";
 import { initialOffset, offsetToBytePos } from "../offsets.js";
-import { commitProducerAppend, evaluateProducerAppend } from "../producer.js";
+import {
+  commitProducerAppend,
+  evaluateProducerAppend,
+  type ProducerAppendDecision,
+} from "../producer.js";
 import {
   formatJsonResponse,
   generateETag,
@@ -22,19 +26,27 @@ import type {
   PutOptions,
   PutResult,
   StreamMessage,
+  WaitOptions,
   WaitResult,
 } from "../types.js";
 import type { StreamStore } from "./interface.js";
 import {
   appendResult,
+  assertPayloadSize,
+  assertProducerAppendReceiptMatches,
+  assertStreamIncarnation,
   assertStreamLive,
   closedAppendResult,
-  inheritedExpiration,
-  normalizeForkSubOffset,
+  decodeProducerAppendReceipt,
+  encodeProducerAppendReceipt,
+  generateIncarnation,
+  type PreparedWholeValueCreate,
   prepareAppendData,
-  prepareForkData,
-  prepareInitialData,
-  resolveCreateContentType,
+  prepareAppendPayload,
+  prepareWholeValueCreate,
+  prepareWholeValueForkCreate,
+  producerAppendReceiptKey,
+  readWholeValueWindow,
   validateAppendContentType,
   validateAppendSeq,
   validateIdempotentCreate,
@@ -48,13 +60,44 @@ import {
 
 type StreamRecord = PersistedStreamMetadata;
 
+type PreparedCreate = {
+  readonly prepared: PreparedWholeValueCreate;
+  readonly forkedFrom?: string;
+  readonly forkSource?: StreamRecord;
+};
+
+export type KVStoreOptions = {
+  /** NOTE: KV has no compare-and-set append primitive; callers route each stream path through one serialized owner, including TTL-renewing reads. */
+  readonly serializedOwner: true;
+  readonly maxReadBytes?: number;
+  readonly maxAppendBytes?: number;
+  readonly maxStreamBytes?: number;
+};
+
+export const DEFAULT_KV_MAX_READ_BYTES = 1_000_000;
+export const DEFAULT_KV_MAX_APPEND_BYTES = 12 * 1024 * 1024;
+export const DEFAULT_KV_MAX_STREAM_BYTES = DEFAULT_KV_MAX_APPEND_BYTES;
+
 export class KVStore implements StreamStore {
   private readonly kv: KVNamespace;
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly streamCache = new Map<string, { contentType: string }>();
+  private readonly maxReadBytes: number;
+  private readonly maxAppendBytes: number;
+  private readonly maxStreamBytes: number;
 
-  constructor(kv: KVNamespace) {
+  constructor(kv: KVNamespace, options: KVStoreOptions) {
+    if (options.serializedOwner !== true) {
+      throw new StreamConflictError(
+        "KVStore requires one serialized owner per stream path"
+      );
+    }
     this.kv = kv;
+    this.maxReadBytes = options?.maxReadBytes ?? DEFAULT_KV_MAX_READ_BYTES;
+    this.maxAppendBytes =
+      options?.maxAppendBytes ?? DEFAULT_KV_MAX_APPEND_BYTES;
+    this.maxStreamBytes =
+      options?.maxStreamBytes ?? DEFAULT_KV_MAX_STREAM_BYTES;
   }
 
   private metaKey(path: string): string {
@@ -63,6 +106,17 @@ export class KVStore implements StreamStore {
 
   private dataKey(path: string): string {
     return `stream:${path}:data`;
+  }
+
+  private producerAppendKey(
+    path: string,
+    producer: NonNullable<AppendOptions["producer"]>
+  ): string {
+    return `stream:${path}:producer:${producerAppendReceiptKey(producer)}`;
+  }
+
+  private producerAppendPrefix(path: string): string {
+    return `stream:${path}:producer:`;
   }
 
   private async getMetadata(path: string): Promise<StreamRecord | null> {
@@ -79,13 +133,28 @@ export class KVStore implements StreamStore {
     return raw ? new Uint8Array(raw) : new Uint8Array(0);
   }
 
-  private async getStreamMetadata(path: string): Promise<StreamRecord | null> {
+  private async getVisibleData(
+    path: string,
+    meta: StreamRecord
+  ): Promise<Uint8Array> {
+    const visibleLength = offsetToBytePos(meta.nextOffset);
+    assertPayloadSize(this.maxStreamBytes, visibleLength);
+    return (await this.getData(path)).slice(0, visibleLength);
+  }
+
+  private async getStreamMetadata(
+    path: string,
+    options?: { readonlyExpiration?: boolean }
+  ): Promise<StreamRecord | null> {
     const meta = await this.getMetadata(path);
     if (!meta) {
       return null;
     }
 
     if (isExpired(meta)) {
+      if (options?.readonlyExpiration === true) {
+        return (meta.childCount ?? 0) > 0 ? { ...meta, deleted: true } : null;
+      }
       return await this.expireStream(path, meta);
     }
 
@@ -121,11 +190,24 @@ export class KVStore implements StreamStore {
 
   private async hardDelete(path: string, meta: StreamRecord): Promise<void> {
     this.notifyDeleted(path);
+    await this.deleteProducerAppendReceipts(path);
     await Promise.all([
       this.kv.delete(this.metaKey(path)),
       this.kv.delete(this.dataKey(path)),
     ]);
     await this.releaseParent(meta.forkedFrom);
+  }
+
+  private async deleteProducerAppendReceipts(path: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+      const listed = await this.kv.list({
+        prefix: this.producerAppendPrefix(path),
+        cursor,
+      });
+      await Promise.all(listed.keys.map((key) => this.kv.delete(key.name)));
+      cursor = listed.list_complete ? undefined : listed.cursor;
+    } while (cursor !== undefined);
   }
 
   private async releaseParent(parentPath: string | undefined): Promise<void> {
@@ -149,89 +231,131 @@ export class KVStore implements StreamStore {
     await this.putMetadata(parentPath, updated);
   }
 
-  async put(path: string, options: PutOptions): Promise<PutResult> {
-    const existingMeta = await this.getStreamMetadata(path);
+  private existingCreateResult(
+    path: string,
+    existingMeta: StreamRecord | null,
+    options: PutOptions
+  ): PutResult | undefined {
+    if (!existingMeta) {
+      return;
+    }
+    if (existingMeta.deleted === true) {
+      throw new StreamConflictError("stream is gone");
+    }
+    assertStreamIncarnation(
+      path,
+      existingMeta.incarnation,
+      options.expectedIncarnation
+    );
+    validateIdempotentCreate(existingMeta, options);
+    return {
+      created: false,
+      incarnation: existingMeta.incarnation,
+      nextOffset: existingMeta.nextOffset,
+      contentType: existingMeta.contentType,
+      closed: existingMeta.closed,
+    };
+  }
 
-    if (existingMeta) {
-      if (existingMeta.deleted === true) {
-        throw new StreamConflictError("stream is gone");
-      }
-      validateIdempotentCreate(existingMeta, options);
+  private async prepareCreate(
+    path: string,
+    options: PutOptions
+  ): Promise<PreparedCreate> {
+    if (options.expectedIncarnation !== undefined) {
+      throw new StreamConflictError(`stream incarnation is stale: ${path}`);
+    }
+
+    if (options.forkedFrom === undefined) {
       return {
-        created: false,
-        nextOffset: existingMeta.nextOffset,
-        contentType: existingMeta.contentType,
-        closed: existingMeta.closed,
+        prepared: prepareWholeValueCreate(
+          options,
+          this.maxAppendBytes,
+          this.maxStreamBytes
+        ),
       };
     }
 
-    let contentType = resolveCreateContentType(options);
-    let ttlSeconds = options.ttlSeconds;
-    let expiresAt = options.expiresAt;
-    let closed = options.closed === true;
-    let forkedFrom: string | undefined;
-    let forkOffset: Offset | undefined;
-    let forkSubOffset: number | undefined;
-    let prepared = prepareInitialData(options);
-
-    if (options.forkedFrom !== undefined) {
-      const source = await this.getStreamMetadata(options.forkedFrom);
-      if (!source) {
-        throw new StreamNotFoundError(options.forkedFrom);
-      }
-      if (source.deleted === true) {
-        throw new StreamConflictError("fork source is gone");
-      }
-      validateAppendContentType(source.contentType, options.contentType);
-
-      const sourceData = await this.getData(options.forkedFrom);
-      forkedFrom = options.forkedFrom;
-      forkOffset = options.forkOffset ?? source.nextOffset;
-      forkSubOffset = normalizeForkSubOffset(options.forkSubOffset);
-      prepared = prepareForkData(
-        sourceData,
-        forkOffset,
-        source.contentType,
-        forkSubOffset,
-        options.data
-      );
-      ({ ttlSeconds, expiresAt } = inheritedExpiration(source, options));
-      contentType = source.contentType;
-      closed = false;
-
-      await this.putMetadata(options.forkedFrom, {
-        ...source,
-        childCount: (source.childCount ?? 0) + 1,
-      });
+    const source = await this.getStreamMetadata(options.forkedFrom);
+    if (!source) {
+      throw new StreamNotFoundError(options.forkedFrom);
     }
+    if (source.deleted === true) {
+      throw new StreamConflictError("fork source is gone");
+    }
+    const sourceData = await this.getVisibleData(options.forkedFrom, source);
+
+    return {
+      prepared: prepareWholeValueForkCreate(
+        {
+          ...source,
+          data: sourceData,
+        },
+        options,
+        this.maxAppendBytes,
+        this.maxStreamBytes
+      ),
+      forkedFrom: options.forkedFrom,
+      forkSource: source,
+    };
+  }
+
+  async put(path: string, options: PutOptions): Promise<PutResult> {
+    const existingResult = this.existingCreateResult(
+      path,
+      await this.getStreamMetadata(path),
+      options
+    );
+    if (existingResult) {
+      return existingResult;
+    }
+
+    const { prepared, forkedFrom, forkSource } = await this.prepareCreate(
+      path,
+      options
+    );
 
     const now = Date.now();
     const meta: StreamRecord = {
-      contentType,
-      ttlSeconds,
-      expiresAt,
+      incarnation: generateIncarnation(),
+      contentType: prepared.contentType,
+      ttlSeconds: prepared.ttlSeconds,
+      expiresAt: prepared.expiresAt,
       createdAt: now,
       lastAccessedAt: now,
       nextOffset: prepared.nextOffset,
       appendCount: prepared.appendCount,
+      appendEndPositions: prepared.appendEndPositions,
       producers: {},
-      closed,
+      closed: prepared.closed,
       forkedFrom,
-      forkOffset,
-      forkSubOffset,
+      forkOffset: prepared.forkOffset,
+      forkSubOffset: prepared.forkSubOffset,
       childCount: 0,
       deleted: false,
     };
 
-    await Promise.all([
-      this.putMetadata(path, meta),
-      this.kv.put(this.dataKey(path), prepared.data),
-    ]);
+    try {
+      await this.kv.put(this.dataKey(path), prepared.data);
+      await this.putMetadata(path, meta);
+      if (forkedFrom !== undefined && forkSource !== undefined) {
+        await this.putMetadata(forkedFrom, {
+          ...forkSource,
+          childCount: (forkSource.childCount ?? 0) + 1,
+        });
+      }
+    } catch (error) {
+      await Promise.all([
+        this.kv.delete(this.metaKey(path)),
+        this.kv.delete(this.dataKey(path)),
+      ]);
+      throw error;
+    }
 
-    this.streamCache.set(path, { contentType });
+    this.streamCache.set(path, { contentType: prepared.contentType });
 
     return {
       created: true,
+      incarnation: meta.incarnation,
       nextOffset: meta.nextOffset,
       contentType: meta.contentType,
       closed: meta.closed,
@@ -243,20 +367,44 @@ export class KVStore implements StreamStore {
     data: Uint8Array,
     options?: AppendOptions
   ): Promise<AppendResult> {
-    let meta = await this.getStreamMetadata(path);
+    const meta = await this.getStreamMetadata(path);
 
     if (!meta) {
       throw new StreamNotFoundError(path);
     }
     assertStreamLive(path, meta);
+    assertStreamIncarnation(
+      path,
+      meta.incarnation,
+      options?.expectedIncarnation
+    );
 
     const producers = meta.producers;
     const producerDecision = evaluateProducerAppend(
       producers,
       options?.producer
     );
+    if (data.length > 0) {
+      validateAppendContentType(meta.contentType, options?.contentType);
+    }
+    const appendPayload = prepareAppendPayload(data, meta.contentType);
+    assertPayloadSize(this.maxAppendBytes, appendPayload.length);
+    const shouldClose = options?.close === true;
+
+    const duplicateResult = await this.duplicateAppendResult(
+      path,
+      meta,
+      options?.producer,
+      appendPayload,
+      shouldClose,
+      producerDecision
+    );
+    if (duplicateResult) {
+      return duplicateResult;
+    }
     const closedResult = closedAppendResult(
       path,
+      meta.incarnation,
       meta.nextOffset,
       meta.closed === true,
       data,
@@ -264,26 +412,11 @@ export class KVStore implements StreamStore {
       producerDecision
     );
     if (closedResult) {
-      await this.touchMetadata(path, meta);
       return closedResult;
-    }
-
-    if (data.length > 0) {
-      validateAppendContentType(meta.contentType, options?.contentType);
-    }
-
-    if (producerDecision._tag === "Duplicate") {
-      await this.touchMetadata(path, meta);
-      return {
-        nextOffset: meta.nextOffset,
-        producer: producerDecision.result,
-        closed: meta.closed,
-        appended: false,
-      };
     }
     validateAppendSeq(meta.lastSeq, options?.seq);
 
-    const existingData = await this.getData(path);
+    const existingData = await this.getVisibleData(path, meta);
 
     const append = prepareAppendData(
       existingData,
@@ -292,25 +425,46 @@ export class KVStore implements StreamStore {
       meta.appendCount,
       meta.nextOffset
     );
-
-    meta = await this.touchMetadata(path, meta);
+    assertPayloadSize(this.maxStreamBytes, append.data.length);
+    const appendEndPositions = [...(meta.appendEndPositions ?? [])];
+    if (append.appended) {
+      appendEndPositions.push(offsetToBytePos(append.nextOffset));
+    }
     const updatedMeta: StreamRecord = {
       ...meta,
       nextOffset: append.nextOffset,
       lastSeq: options?.seq ?? meta.lastSeq,
       appendCount: append.appendCount,
+      appendEndPositions,
       producers: commitProducerAppend(producers, producerDecision),
-      closed: options?.close === true,
+      closed: shouldClose,
+      lastAccessedAt: Date.now(),
     };
 
-    await Promise.all([
-      this.kv.put(this.metaKey(path), JSON.stringify(updatedMeta)),
-      this.kv.put(this.dataKey(path), append.data),
-    ]);
+    await this.kv.put(this.dataKey(path), append.data);
+    if (producerDecision._tag === "Accepted") {
+      await this.kv.put(
+        this.producerAppendKey(path, producerDecision.result),
+        encodeProducerAppendReceipt({
+          endOffset: append.nextOffset,
+          data: appendPayload,
+          closed: shouldClose,
+        })
+      );
+    }
+    await this.kv.put(this.metaKey(path), JSON.stringify(updatedMeta));
 
-    this.notifyWaiters(path, append.data, updatedMeta.closed === true);
+    this.notifyWaiters(
+      path,
+      append.data,
+      updatedMeta.nextOffset,
+      shouldClose,
+      updatedMeta.contentType,
+      appendEndPositions
+    );
 
     return appendResult(
+      updatedMeta.incarnation,
       updatedMeta.nextOffset,
       updatedMeta.closed === true,
       append.appended,
@@ -318,46 +472,93 @@ export class KVStore implements StreamStore {
     );
   }
 
+  private async duplicateAppendResult(
+    path: string,
+    meta: StreamRecord,
+    producer: AppendOptions["producer"],
+    appendPayload: Uint8Array,
+    shouldClose: boolean,
+    producerDecision: ProducerAppendDecision
+  ): Promise<AppendResult | undefined> {
+    if (producerDecision._tag !== "Duplicate") {
+      return;
+    }
+    if (producer === undefined) {
+      throw new StreamConflictError(
+        `producer retry receipt is missing: ${path}`
+      );
+    }
+    const stored = await this.kv.get(
+      this.producerAppendKey(path, producer),
+      "arrayBuffer"
+    );
+    const receipt = assertProducerAppendReceiptMatches(
+      path,
+      decodeProducerAppendReceipt(
+        path,
+        stored === null ? null : new Uint8Array(stored)
+      ),
+      appendPayload,
+      shouldClose
+    );
+    return {
+      incarnation: meta.incarnation,
+      nextOffset: receipt.endOffset,
+      producer: producerDecision.result,
+      closed: meta.closed,
+      appended: false,
+    };
+  }
+
   async get(path: string, options?: GetOptions): Promise<GetResult> {
-    let meta = await this.getStreamMetadata(path);
+    let meta = await this.getStreamMetadata(path, {
+      readonlyExpiration: true,
+    });
 
     if (!meta) {
       this.streamCache.delete(path);
       throw new StreamNotFoundError(path);
     }
     assertStreamLive(path, meta);
-    meta = await this.touchMetadata(path, meta);
-
+    assertStreamIncarnation(
+      path,
+      meta.incarnation,
+      options?.expectedIncarnation
+    );
+    if (options?.renewTtl !== false) {
+      meta = await this.touchMetadata(path, meta);
+    }
     this.streamCache.set(path, { contentType: meta.contentType });
 
-    const data = await this.getData(path);
+    const data = await this.getVisibleData(path, meta);
 
     const startOffset = options?.offset ?? initialOffset();
-    const byteOffset = offsetToBytePos(startOffset);
-
-    const messages: StreamMessage[] = [];
-
-    if (byteOffset < data.length) {
-      messages.push({
-        offset: startOffset,
-        timestamp: Date.now(),
-        data: data.slice(byteOffset),
-      });
-    }
+    const window = readWholeValueWindow(
+      data,
+      startOffset,
+      meta.nextOffset,
+      meta.closed,
+      this.maxReadBytes,
+      meta.contentType,
+      meta.appendEndPositions ?? []
+    );
 
     return {
-      messages,
-      nextOffset: meta.nextOffset,
-      upToDate: true,
+      messages: window.messages,
+      incarnation: meta.incarnation,
+      nextOffset: window.nextOffset,
+      upToDate: window.upToDate,
       cursor: calculateCursor(),
-      etag: generateETag(path, startOffset, meta.nextOffset),
+      etag: generateETag(path, startOffset, window.nextOffset),
       contentType: meta.contentType,
-      closed: meta.closed === true,
+      closed: window.closed === true,
     };
   }
 
   async head(path: string): Promise<HeadResult | null> {
-    const meta = await this.getStreamMetadata(path);
+    const meta = await this.getStreamMetadata(path, {
+      readonlyExpiration: true,
+    });
 
     if (!meta) {
       this.streamCache.delete(path);
@@ -369,6 +570,7 @@ export class KVStore implements StreamStore {
 
     return {
       contentType: meta.contentType,
+      incarnation: meta.incarnation,
       nextOffset: meta.nextOffset,
       etag: generateETag(path, initialOffset(), meta.nextOffset),
       closed: meta.closed === true,
@@ -394,39 +596,60 @@ export class KVStore implements StreamStore {
     await this.hardDelete(path, meta);
   }
 
-  has(path: string): boolean {
-    return this.streamCache.has(path);
+  async has(path: string): Promise<boolean> {
+    const meta = await this.getStreamMetadata(path, {
+      readonlyExpiration: true,
+    });
+    return meta !== null && meta !== undefined && meta.deleted !== true;
   }
 
   async waitForData(
     path: string,
     offset: Offset,
-    timeoutMs: number
+    timeoutMs: number,
+    options?: WaitOptions
   ): Promise<WaitResult> {
-    let meta = await this.getStreamMetadata(path);
+    const meta = await this.getStreamMetadata(path, {
+      readonlyExpiration: true,
+    });
 
     if (!meta) {
       throw new StreamNotFoundError(path);
     }
     assertStreamLive(path, meta);
-    meta = await this.touchMetadata(path, meta);
+    assertStreamIncarnation(
+      path,
+      meta.incarnation,
+      options?.expectedIncarnation
+    );
+    const data = await this.getVisibleData(path, meta);
 
-    const data = await this.getData(path);
+    const window = readWholeValueWindow(
+      data,
+      offset,
+      meta.nextOffset,
+      meta.closed,
+      this.maxReadBytes,
+      meta.contentType,
+      meta.appendEndPositions ?? []
+    );
 
-    const byteOffset = offsetToBytePos(offset);
-
-    if (byteOffset < data.length) {
+    if (window.messages.length > 0) {
       return {
-        messages: [
-          { offset, timestamp: Date.now(), data: data.slice(byteOffset) },
-        ],
+        messages: window.messages,
         timedOut: false,
-        closed: meta.closed,
+        incarnation: meta.incarnation,
+        closed: window.closed,
       };
     }
 
     if (meta.closed === true) {
-      return { messages: [], timedOut: false, closed: true };
+      return {
+        messages: [],
+        timedOut: false,
+        incarnation: meta.incarnation,
+        closed: true,
+      };
     }
 
     return waitForChange(
@@ -473,14 +696,30 @@ export class KVStore implements StreamStore {
     return isJson ? formatJsonResponse(combined) : combined;
   }
 
-  private notifyWaiters(path: string, data: Uint8Array, closed = false): void {
+  private notifyWaiters(
+    path: string,
+    data: Uint8Array,
+    tailOffset: Offset,
+    closed = false,
+    contentType?: string,
+    appendEndPositions: readonly number[] = []
+  ): void {
     const waiters = this.waiters.get(path) ?? [];
     this.waiters.set(path, []);
-    notifyDataWaiters(waiters, data, closed, (waiter) => {
-      const remaining = this.waiters.get(path) ?? [];
-      remaining.push(waiter);
-      this.waiters.set(path, remaining);
-    });
+    notifyDataWaiters(
+      waiters,
+      data,
+      tailOffset,
+      closed,
+      this.maxReadBytes,
+      contentType,
+      appendEndPositions,
+      (waiter) => {
+        const remaining = this.waiters.get(path) ?? [];
+        remaining.push(waiter);
+        this.waiters.set(path, remaining);
+      }
+    );
   }
 
   private notifyDeleted(path: string): void {

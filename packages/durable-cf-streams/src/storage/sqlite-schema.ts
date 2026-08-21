@@ -1,6 +1,7 @@
 export const SQLITE_STREAMS_SCHEMA = `
   CREATE TABLE IF NOT EXISTS streams (
     path TEXT PRIMARY KEY,
+    incarnation TEXT NOT NULL,
     content_type TEXT NOT NULL,
     ttl_seconds INTEGER,
     expires_at TEXT,
@@ -8,6 +9,9 @@ export const SQLITE_STREAMS_SCHEMA = `
     last_accessed_at INTEGER,
     next_offset TEXT NOT NULL,
     last_seq TEXT,
+    producer_id TEXT,
+    producer_epoch INTEGER NOT NULL DEFAULT 0,
+    next_producer_sequence INTEGER NOT NULL DEFAULT 0,
     append_count INTEGER NOT NULL DEFAULT 0,
     closed INTEGER NOT NULL DEFAULT 0,
     forked_from TEXT,
@@ -18,56 +22,40 @@ export const SQLITE_STREAMS_SCHEMA = `
   )
 `;
 
+export const SQL_STREAMS_FORMAT_VERSION = "4";
+
+export const SQL_STREAMS_META_SCHEMA =
+  "CREATE TABLE IF NOT EXISTS stream_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
+
 /**
- * initializes the stream metadata table used by `SqliteStore`.
- * NOTE: stream bytes must live in `stream_chunks`; a non-empty `streams.data` column is rejected because `SqliteStore` does not read snapshot bytes.
+ * creates the stream metadata table used by `SqliteStore`.
+ * NOTE: this is a breaking schema; unversioned SQL stores are rejected instead of migrated.
  */
 export const initializeSqliteStreamsSchema = (sql: SqlStorage): void => {
-  sql.exec(SQLITE_STREAMS_SCHEMA);
-  const columns = sql.exec("PRAGMA table_info(streams)").toArray() as {
-    name: string;
-  }[];
-  const hasColumn = (name: string) =>
-    columns.some((column) => column.name === name);
-  const addColumn = (name: string, sqlStatement: string) => {
-    if (!hasColumn(name)) {
-      sql.exec(sqlStatement);
-    }
-  };
-
-  addColumn(
-    "closed",
-    "ALTER TABLE streams ADD COLUMN closed INTEGER NOT NULL DEFAULT 0"
-  );
-  addColumn(
-    "last_accessed_at",
-    "ALTER TABLE streams ADD COLUMN last_accessed_at INTEGER"
-  );
-  addColumn("forked_from", "ALTER TABLE streams ADD COLUMN forked_from TEXT");
-  addColumn("fork_offset", "ALTER TABLE streams ADD COLUMN fork_offset TEXT");
-  addColumn(
-    "fork_sub_offset",
-    "ALTER TABLE streams ADD COLUMN fork_sub_offset INTEGER"
-  );
-  addColumn(
-    "child_count",
-    "ALTER TABLE streams ADD COLUMN child_count INTEGER NOT NULL DEFAULT 0"
-  );
-  addColumn(
-    "deleted",
-    "ALTER TABLE streams ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
-  );
-
-  if (hasColumn("data")) {
-    const rows = sql
-      .exec<{ row_count: number }>(
-        "SELECT COUNT(*) AS row_count FROM streams WHERE length(data) > 0"
+  sql.exec(SQL_STREAMS_META_SCHEMA);
+  const stored = sql
+    .exec("SELECT value FROM stream_meta WHERE key = 'format_version'")
+    .toArray()[0]?.value;
+  if (stored !== undefined && String(stored) !== SQL_STREAMS_FORMAT_VERSION) {
+    throw new Error(
+      `Unsupported stream storage format ${String(stored)}; expected ${SQL_STREAMS_FORMAT_VERSION}`
+    );
+  }
+  if (stored === undefined) {
+    const existing = sql
+      .exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('streams', 'stream_chunks', 'stream_producers') LIMIT 1"
       )
-      .toArray();
-    if ((rows[0]?.row_count ?? 0) > 0) {
+      .toArray()[0];
+    if (existing !== undefined) {
       throw new Error(
-        "SqliteStore requires stream bytes in stream_chunks; found non-empty streams.data"
+        "Unsupported unversioned stream storage format; clear the old SQL stream tables before opening this breaking schema"
       );
     }
+    sql.exec(
+      "INSERT INTO stream_meta (key, value) VALUES ('format_version', ?)",
+      SQL_STREAMS_FORMAT_VERSION
+    );
   }
+  sql.exec(SQLITE_STREAMS_SCHEMA);
 };

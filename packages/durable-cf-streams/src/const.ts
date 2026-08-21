@@ -1,6 +1,8 @@
 export const STREAM_OFFSET_HEADER = "Stream-Next-Offset";
 export const STREAM_CURSOR_HEADER = "Stream-Cursor";
 export const STREAM_UP_TO_DATE_HEADER = "Stream-Up-To-Date";
+export const STREAM_INCARNATION_HEADER = "Stream-Incarnation";
+export const STREAM_IF_INCARNATION_HEADER = "Stream-If-Incarnation";
 export const STREAM_SEQ_HEADER = "Stream-Seq";
 export const STREAM_TTL_HEADER = "Stream-TTL";
 export const STREAM_EXPIRES_AT_HEADER = "Stream-Expires-At";

@@ -1,8 +1,14 @@
-import type { AppendResult, Offset, StreamStore } from "durable-cf-streams";
+import type {
+  AppendResult,
+  Offset,
+  StreamIncarnation,
+  StreamStore,
+} from "durable-cf-streams";
 import {
   CACHE_CONTROL_HEADER,
   DEFAULT_CONTENT_TYPE,
   encodeSSEData,
+  generateResponseCursor,
   HEAD_CACHE_CONTROL_VALUE,
   isSSETextCompatibleContentType,
   isStreamError,
@@ -15,12 +21,16 @@ import {
   parseProducerHeaders,
   RESERVED_CONTROL_PATH_SEGMENT,
   STREAM_CLOSED_HEADER,
+  STREAM_CURSOR_HEADER,
   STREAM_EXPIRES_AT_HEADER,
   STREAM_FORK_OFFSET_HEADER,
   STREAM_FORK_SUB_OFFSET_HEADER,
   STREAM_FORKED_FROM_HEADER,
+  STREAM_IF_INCARNATION_HEADER,
+  STREAM_INCARNATION_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_TTL_HEADER,
+  STREAM_UP_TO_DATE_HEADER,
   streamErrorHeaders,
   streamErrorStatus,
   TAIL_OFFSET_QUERY_VALUE,
@@ -41,17 +51,22 @@ export function createSSEWriter(
   const encoder = new TextEncoder();
   let pending = "";
   let scheduled = false;
+  let closed = false;
 
   const flush = () => {
     scheduled = false;
 
-    if (pending.length === 0) {
+    if (closed || pending.length === 0) {
       return;
     }
 
     const chunk = pending;
     pending = "";
-    controller.enqueue(encoder.encode(chunk));
+    try {
+      controller.enqueue(encoder.encode(chunk));
+    } catch {
+      closed = true;
+    }
   };
 
   const scheduleFlush = () => {
@@ -63,10 +78,16 @@ export function createSSEWriter(
 
   return {
     send: (event: string, data: string) => {
+      if (closed) {
+        return;
+      }
       pending += `event: ${event}\n${encodeSSEData(data)}\n\n`;
       scheduleFlush();
     },
     comment: (comment: string) => {
+      if (closed) {
+        return;
+      }
       pending += `: ${comment}\n\n`;
       scheduleFlush();
     },
@@ -438,9 +459,14 @@ export async function resolveReadRequest(
 
 type SSELoopState = {
   currentOffset: Offset;
+  expectedIncarnation?: StreamIncarnation;
 };
 
-export type SendSSEControl = (offset: Offset, closed?: boolean) => void;
+export type SendSSEControl = (
+  offset: Offset,
+  closed?: boolean,
+  upToDate?: boolean
+) => void;
 export type SendSSEData = (data: Uint8Array, contentType: string) => void;
 
 export async function sendSSESnapshot(
@@ -450,7 +476,11 @@ export async function sendSSESnapshot(
   sendControl: SendSSEControl,
   sendData: SendSSEData
 ): Promise<boolean> {
-  const result = await store.get(path, { offset: state.currentOffset });
+  const result = await store.get(path, {
+    offset: state.currentOffset,
+    expectedIncarnation: state.expectedIncarnation,
+    renewTtl: false,
+  });
 
   if (result.messages.length > 0) {
     const body = store.formatResponse(path, result.messages);
@@ -458,7 +488,7 @@ export async function sendSSESnapshot(
     state.currentOffset = result.nextOffset;
   }
 
-  sendControl(state.currentOffset, result.closed);
+  sendControl(state.currentOffset, result.closed, result.upToDate);
   return result.closed;
 }
 
@@ -468,8 +498,12 @@ async function sendSSETimeoutControl(
   state: SSELoopState,
   sendControl: SendSSEControl
 ): Promise<boolean> {
-  const current = await store.get(path, { offset: state.currentOffset });
-  sendControl(current.nextOffset, current.closed);
+  const current = await store.get(path, {
+    offset: state.currentOffset,
+    expectedIncarnation: state.expectedIncarnation,
+    renewTtl: false,
+  });
+  sendControl(current.nextOffset, current.closed, current.upToDate);
   return current.closed;
 }
 
@@ -481,7 +515,7 @@ export async function pumpSSEStream(
   sendControl: SendSSEControl,
   sendData: SendSSEData
 ): Promise<void> {
-  if (!store.has(path)) {
+  if (!(await store.has(path))) {
     throw new Error("Stream not found");
   }
 
@@ -490,11 +524,14 @@ export async function pumpSSEStream(
   }
 
   while (!state.cancelled) {
-    if (!store.has(path)) {
+    if (!(await store.has(path))) {
       throw new Error("Stream not found");
     }
 
-    const wait = await store.waitForData(path, state.currentOffset, timeoutMs);
+    const wait = await store.waitForData(path, state.currentOffset, timeoutMs, {
+      expectedIncarnation: state.expectedIncarnation,
+      renewTtl: false,
+    });
     const closed = wait.timedOut
       ? await sendSSETimeoutControl(store, path, state, sendControl)
       : await sendSSESnapshot(store, path, state, sendControl, sendData);
@@ -509,6 +546,13 @@ export function parseProducerOptions(request: Request) {
   return parseProducerHeaders(request.headers);
 }
 
+export function parseExpectedIncarnation(
+  request: Request
+): StreamIncarnation | undefined {
+  const value = request.headers.get(STREAM_IF_INCARNATION_HEADER);
+  return value === null ? undefined : (value as StreamIncarnation);
+}
+
 export function isStreamClosedRequest(request: Request): boolean {
   return request.headers.get(STREAM_CLOSED_HEADER)?.toLowerCase() === "true";
 }
@@ -518,11 +562,15 @@ export function streamClosedHeaders(closed: boolean | undefined): HeadersInit {
 }
 
 export function streamMetadataHeaders(result: {
+  readonly incarnation?: StreamIncarnation;
   readonly closed?: boolean;
   readonly ttlSeconds?: number;
   readonly expiresAt?: string;
 }): HeadersInit {
   return {
+    ...(result.incarnation === undefined
+      ? {}
+      : { [STREAM_INCARNATION_HEADER]: result.incarnation }),
     ...streamClosedHeaders(result.closed),
     ...(result.ttlSeconds === undefined
       ? {}
@@ -533,8 +581,89 @@ export function streamMetadataHeaders(result: {
   };
 }
 
+type LongPollReadResult = Awaited<ReturnType<StreamStore["get"]>>;
+
+const longPollHeaders = (
+  result: LongPollReadResult,
+  clientCursor: string | undefined
+): HeadersInit => ({
+  ETag: result.etag,
+  [STREAM_OFFSET_HEADER]: result.nextOffset,
+  [STREAM_CURSOR_HEADER]: generateResponseCursor(clientCursor),
+  [STREAM_UP_TO_DATE_HEADER]: result.upToDate ? "true" : "false",
+  ...streamMetadataHeaders(result),
+});
+
+const longPollBodyResponse = (
+  store: StreamStore,
+  path: string,
+  result: LongPollReadResult,
+  clientCursor: string | undefined
+): Response =>
+  new Response(store.formatResponse(path, result.messages), {
+    status: 200,
+    headers: {
+      "Content-Type": result.contentType,
+      ...longPollHeaders(result, clientCursor),
+    },
+  });
+
+const longPollEmptyResponse = (
+  status: 204 | 304,
+  result: LongPollReadResult,
+  clientCursor: string | undefined
+): Response =>
+  new Response(null, {
+    status,
+    headers: longPollHeaders(result, clientCursor),
+  });
+
+/**
+ * returns one long-poll response for all examples.
+ * NOTE: this keeps freshness, closed state, and incarnation handling in one place instead of copying subtle response branches across every storage example.
+ */
+export async function handleLongPollResponse(
+  store: StreamStore,
+  path: string,
+  offset: Offset,
+  clientCursor: string | undefined,
+  ifNoneMatch: string | undefined,
+  expectedIncarnation: StreamIncarnation | undefined
+): Promise<Response> {
+  const initial = await store.get(path, {
+    offset,
+    expectedIncarnation,
+    renewTtl: false,
+  });
+
+  if (initial.messages.length > 0) {
+    return longPollBodyResponse(store, path, initial, clientCursor);
+  }
+  if (ifNoneMatch && initial.etag === ifNoneMatch) {
+    return longPollEmptyResponse(304, initial, clientCursor);
+  }
+  if (initial.closed) {
+    return longPollEmptyResponse(204, initial, clientCursor);
+  }
+
+  await store.waitForData(path, offset, LIVE_WAIT_TIMEOUT_MS, {
+    expectedIncarnation,
+    renewTtl: false,
+  });
+  const result = await store.get(path, {
+    offset,
+    expectedIncarnation,
+    renewTtl: false,
+  });
+
+  return result.messages.length === 0
+    ? longPollEmptyResponse(204, result, clientCursor)
+    : longPollBodyResponse(store, path, result, clientCursor);
+}
+
 export function appendResponse(result: AppendResult): Response {
   const headers = new Headers({
+    [STREAM_INCARNATION_HEADER]: result.incarnation,
     [STREAM_OFFSET_HEADER]: result.nextOffset,
   });
 

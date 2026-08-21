@@ -26,6 +26,8 @@ export {
   STREAM_FORK_OFFSET_HEADER,
   STREAM_FORK_SUB_OFFSET_HEADER,
   STREAM_FORKED_FROM_HEADER,
+  STREAM_IF_INCARNATION_HEADER,
+  STREAM_INCARNATION_HEADER,
   STREAM_OFFSET_HEADER,
   STREAM_SEQ_HEADER,
   STREAM_SSE_DATA_ENCODING_HEADER,
@@ -104,6 +106,7 @@ export {
   OffsetSchema,
   ProducerStateMapSchema,
   ProducerStateSchema,
+  StreamIncarnationSchema,
 } from "./schema.js";
 export type { StreamStore } from "./storage/interface.js";
 export type {
@@ -121,6 +124,7 @@ export type {
   ProducerStateMap,
   PutOptions,
   PutResult,
+  StreamIncarnation,
   StreamMessage,
   StreamMetadata,
   WaitResult,
