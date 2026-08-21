@@ -7,10 +7,12 @@ import {
   InvalidProducerError,
   ProducerFencedError,
   ProducerSequenceConflictError,
+  StreamConflictError,
 } from "./errors.js";
 import type {
   ProducerAppendOptions,
   ProducerAppendResult,
+  ProducerClaim,
   ProducerState,
   ProducerStateMap,
 } from "./types.js";
@@ -70,6 +72,10 @@ export const parseProducerHeaders = (
   };
 };
 
+/**
+ * evaluates one append against the caller's producer lane.
+ * NOTE: producer headers provide per-producer idempotency, not a Flue-style single current writer claim for the whole stream.
+ */
 export const evaluateProducerAppend = (
   producers: ProducerStateMap,
   producer: ProducerAppendOptions | undefined
@@ -125,6 +131,53 @@ export const evaluateProducerAppend = (
   if (producer.seq !== expectedSeq) {
     throw new ProducerSequenceConflictError(
       String(expectedSeq),
+      String(producer.seq)
+    );
+  }
+
+  return {
+    _tag: "Accepted",
+    nextState: { epoch: producer.epoch, seq: producer.seq },
+    result: { ...producer, duplicate: false },
+  };
+};
+
+/**
+ * evaluates one append against a stream-wide producer claim.
+ * NOTE: this is the Flue-shaped fence; once a stream has a claim, only that producer id and epoch may advance the stream.
+ */
+export const evaluateClaimedProducerAppend = (
+  claim: ProducerClaim,
+  producer: ProducerAppendOptions | undefined
+): ProducerAppendDecision => {
+  if (producer === undefined) {
+    throw new InvalidProducerError(
+      "Producer headers required for claimed stream"
+    );
+  }
+
+  if (producer.id !== claim.id) {
+    throw new StreamConflictError("Producer ownership is stale");
+  }
+  if (producer.epoch !== claim.epoch) {
+    throw new ProducerFencedError(claim.epoch, producer.epoch);
+  }
+
+  if (producer.seq < claim.nextSeq) {
+    return {
+      _tag: "Duplicate",
+      result: {
+        id: producer.id,
+        epoch: producer.epoch,
+        seq: claim.nextSeq - 1,
+        duplicate: true,
+      },
+    };
+  }
+
+  if (producer.seq > claim.nextSeq) {
+    throw new ProducerSequenceConflictError(
+      String(claim.nextSeq),
       String(producer.seq)
     );
   }

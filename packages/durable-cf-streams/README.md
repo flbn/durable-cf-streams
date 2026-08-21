@@ -31,11 +31,22 @@ const store = new D1Store(env.DB);
 await store.initialize(); // creates tables
 
 // workers kv
-const store = new KVStore(env.KV);
+const store = new KVStore(env.KV, { serializedOwner: true });
 
 // r2 bucket
-const store = new R2Store(env.BUCKET);
+const store = new R2Store(env.BUCKET, { serializedOwner: true });
 ```
+
+`SqliteStore` and `D1Store` keep stream metadata, bytes, and producer state in separate SQL rows so a long stream does not rewrite one growing SQL value.
+They use a breaking schema and do not migrate old `streams.data` rows.
+
+NOTE: each create mints a fresh stream incarnation; send `Stream-If-Incarnation` when a client rejects stale reads or writes after delete and recreate of the same path.
+NOTE: one logical put or append is capped at 12 MiB by default, then stored across bounded chunk rows when needed.
+NOTE: SQL reads validate chunk indexes, counts, byte ranges, offsets, and data lengths before returning data.
+NOTE: SQL reads return bounded windows; when `get()` returns `upToDate: false`, resume from the returned `nextOffset`.
+NOTE: memory, KV, and R2 are whole-value stores; they cap the complete stream body with `maxStreamBytes` before they accept or materialize it.
+NOTE: KV and R2 do not provide a compare-and-set append primitive, so callers route each stream path through one serialized owner and acknowledge that invariant with `{ serializedOwner: true }`.
+NOTE: producer headers provide per-producer idempotency lanes; they do not acquire a single current writer claim for the whole stream.
 
 ## streamstore interface
 
@@ -46,8 +57,8 @@ interface StreamStore {
   get(path: string, options?: GetOptions): Promise<GetResult>;
   head(path: string): Promise<HeadResult | null>;
   delete(path: string): Promise<void>;
-  has(path: string): boolean;
-  waitForData(path: string, offset: string, timeoutMs: number): Promise<WaitResult>;
+  has(path: string): Promise<boolean>;
+  waitForData(path: string, offset: string, timeoutMs: number, options?: WaitOptions): Promise<WaitResult>;
   formatResponse(path: string, messages: StreamMessage[]): Uint8Array;
 }
 ```
@@ -61,21 +72,23 @@ compatible with the [durable streams protocol](https://github.com/durable-stream
 ```typescript
 import {
   // header constants
-  STREAM_OFFSET_HEADER,     // "Stream-Next-Offset"
-  STREAM_CURSOR_HEADER,     // "Stream-Cursor"
-  STREAM_UP_TO_DATE_HEADER, // "Stream-Up-To-Date"
-  STREAM_SEQ_HEADER,        // "Stream-Seq"
-  STREAM_TTL_HEADER,        // "Stream-TTL"
-  STREAM_EXPIRES_AT_HEADER, // "Stream-Expires-At"
+  STREAM_OFFSET_HEADER,         // "Stream-Next-Offset"
+  STREAM_CURSOR_HEADER,         // "Stream-Cursor"
+  STREAM_UP_TO_DATE_HEADER,     // "Stream-Up-To-Date"
+  STREAM_INCARNATION_HEADER,    // "Stream-Incarnation"
+  STREAM_IF_INCARNATION_HEADER, // "Stream-If-Incarnation"
+  STREAM_SEQ_HEADER,            // "Stream-Seq"
+  STREAM_TTL_HEADER,            // "Stream-TTL"
+  STREAM_EXPIRES_AT_HEADER,     // "Stream-Expires-At"
   STREAM_SSE_DATA_ENCODING_HEADER, // "Stream-SSE-Data-Encoding"
-  STREAM_CLOSED_HEADER,     // "Stream-Closed"
-  STREAM_FORKED_FROM_HEADER, // "Stream-Forked-From"
-  STREAM_FORK_OFFSET_HEADER, // "Stream-Fork-Offset"
+  STREAM_CLOSED_HEADER,         // "Stream-Closed"
+  STREAM_FORKED_FROM_HEADER,    // "Stream-Forked-From"
+  STREAM_FORK_OFFSET_HEADER,    // "Stream-Fork-Offset"
   STREAM_FORK_SUB_OFFSET_HEADER, // "Stream-Fork-Sub-Offset"
   RESERVED_CONTROL_PATH_SEGMENT, // "__ds"
-  PRODUCER_ID_HEADER,       // "Producer-Id"
-  PRODUCER_EPOCH_HEADER,    // "Producer-Epoch"
-  PRODUCER_SEQ_HEADER,      // "Producer-Seq"
+  PRODUCER_ID_HEADER,           // "Producer-Id"
+  PRODUCER_EPOCH_HEADER,        // "Producer-Epoch"
+  PRODUCER_SEQ_HEADER,          // "Producer-Seq"
   PRODUCER_EXPECTED_SEQ_HEADER, // "Producer-Expected-Seq"
   PRODUCER_RECEIVED_SEQ_HEADER, // "Producer-Received-Seq"
   CACHE_CONTROL_HEADER,     // "Cache-Control"
@@ -123,11 +136,13 @@ import {
   OffsetSchema,
   ProducerStateMapSchema,
   ProducerStateSchema,
+  StreamIncarnationSchema,
   type Cursor,
   type ETag,
   type Offset,
   type ProducerState,
   type ProducerStateMap,
+  type StreamIncarnation,
 } from "durable-cf-streams";
 ```
 
@@ -188,8 +203,11 @@ import {
   SequenceConflictError,
   StreamClosedError,
   StreamConflictError,
+  type StreamErrorEventData,
   StreamGoneError,
   StreamNotFoundError,
+  streamErrorEventData,
+  streamErrorEventJson,
   isStreamError,
   streamErrorHeaders,
   streamErrorStatus,
@@ -242,6 +260,7 @@ export class StreamDO extends DurableObject {
       return new Response(null, {
         status: result.created ? 201 : 200,
         headers: {
+          [STREAM_INCARNATION_HEADER]: result.incarnation,
           [STREAM_OFFSET_HEADER]: result.nextOffset,
           "Content-Type": result.contentType,
         },

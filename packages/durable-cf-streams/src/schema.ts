@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 const OFFSET_REGEX = /^[0-9a-f]{16}_[0-9a-f]{16}$/;
+const STREAM_INCARNATION_REGEX = /^inc_[a-z0-9]+$/;
 
 const nonEmptyString = (name: string) =>
   Schema.String.pipe(
@@ -44,6 +45,17 @@ export type Cursor = Schema.Schema.Type<typeof CursorSchema>;
 export const ETagSchema = Schema.String.pipe(Schema.brand("ETag"));
 export type ETag = Schema.Schema.Type<typeof ETagSchema>;
 
+export const StreamIncarnationSchema = Schema.String.pipe(
+  Schema.filter(
+    (value) =>
+      STREAM_INCARNATION_REGEX.test(value) || "Expected stream incarnation"
+  ),
+  Schema.brand("StreamIncarnation")
+);
+export type StreamIncarnation = Schema.Schema.Type<
+  typeof StreamIncarnationSchema
+>;
+
 export const ProducerStateSchema = Schema.Struct({
   epoch: nonNegativeSafeInteger("producer epoch"),
   seq: nonNegativeSafeInteger("producer sequence"),
@@ -59,6 +71,7 @@ export type ProducerStateMap = Schema.Schema.Type<
 >;
 
 export const PersistedStreamMetadataSchema = Schema.Struct({
+  incarnation: StreamIncarnationSchema,
   contentType: nonEmptyString("content type"),
   ttlSeconds: Schema.optional(positiveSafeInteger("ttlSeconds")),
   expiresAt: Schema.optional(Schema.String),
@@ -67,6 +80,9 @@ export const PersistedStreamMetadataSchema = Schema.Struct({
   nextOffset: OffsetSchema,
   lastSeq: Schema.optional(Schema.String),
   appendCount: nonNegativeSafeInteger("appendCount"),
+  appendEndPositions: Schema.optional(
+    Schema.Array(nonNegativeSafeInteger("append end position"))
+  ),
   producers: ProducerStateMapSchema,
   closed: Schema.optional(Schema.Boolean),
   forkedFrom: Schema.optional(Schema.String),

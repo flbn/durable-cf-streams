@@ -5,9 +5,11 @@ import type {
   GetResult,
   HeadResult,
   Offset,
+  ProducerClaim,
   PutOptions,
   PutResult,
   StreamMessage,
+  WaitOptions,
   WaitResult,
 } from "../types.js";
 
@@ -26,13 +28,16 @@ export type StreamStore = {
 
   delete(path: string): Promise<void>;
 
-  has(path: string): boolean;
+  has(path: string): Promise<boolean>;
 
   waitForData(
     path: string,
     offset: Offset,
-    timeoutMs: number
+    timeoutMs: number,
+    options?: WaitOptions
   ): Promise<WaitResult>;
 
   formatResponse(path: string, messages: StreamMessage[]): Uint8Array;
+
+  acquireProducer?(path: string, producerId: string): Promise<ProducerClaim>;
 };
